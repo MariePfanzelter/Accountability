@@ -1,0 +1,6 @@
+# Persönliche Daten – nicht veröffentlichen
+Accountability.xlsx
+seed-data.js
+*.xlsx
+*.csv
+accountability-backup-*.json
