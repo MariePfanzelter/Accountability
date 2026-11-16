@@ -44,7 +44,7 @@
     { id: 'contacts', label: 'Kontakte angeschrieben', keys: CONTACT_KEYS },
     { id: 'testreel', label: 'Testreel gepostet', keys: ['instagram_testreels'] },
     { id: 'story', label: 'Story gepostet', keys: ['instagram_stories'] },
-    { id: 'pd', label: 'Persönlichkeitsentwicklung', keys: ['pd_text'], text: true },
+    { id: 'pd', label: 'Persönlichkeitsentwicklung', keys: ['pd', 'pd_text'], text: true },
   ];
   const WEEKLY_TODOS = [
     { id: 'sprechstory', label: 'Sprechstory', keys: ['instagram_sprechstories'] },
@@ -95,6 +95,7 @@
   const WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
   const fmtShort = (s) => { const d = parse(s); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.`; };
   const fmtDay = (s) => `${WD[parse(s).getDay()]}, ${fmtShort(s)}`;
+  const fmtCycle = (s) => parse(s).toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
   const fmtLong = (s) => parse(s).toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
   const nf = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1 });
   const fmt = (n) => nf.format(n || 0);
@@ -151,7 +152,27 @@
   function normalize(s = state) {
     s.settings.goals = { ...DEFAULT_GOALS, ...s.settings.goals };
     s.deleted = s.deleted || {};
+    s.marketing = Array.isArray(s.marketing) ? s.marketing.filter((m) => m && m.id && !s.deleted[m.id]) : [];
+    // Chat-Vorlagen einmalig hinzufügen (gelöschte bleiben gelöscht, bearbeitete bleiben bearbeitet)
+    s.marketing = s.marketing.filter((m) => m.id !== 's-wa-2');
+    s.marketing.forEach((m) => { if (m.text && m.text.includes('{Name}')) m.text = m.text.replace(/\s?\{Name\}/g, ''); });
+    const have = new Set(s.marketing.map((m) => m.id));
+    (window.MK_SEED || []).forEach((m, i) => { if (!have.has(m.id) && !s.deleted[m.id]) s.marketing.push({ ...m, url: '', fav: false, order: i + 1, created: 0, ts: 0 }); });
     s.cycles.sort((a, b) => a.start.localeCompare(b.start));
+    // Cycles laufen automatisch weiter: immer 28 Tage, nahtlos aneinander.
+    // Feste ID je Startdatum, damit zwei Geräte denselben Cycle anlegen und kein Duplikat entsteht.
+    const today = todayISO();
+    let last = s.cycles[s.cycles.length - 1];
+    while (last && addDays(last.start, last.length - 1) < today) {
+      const start = addDays(last.start, last.length), num = Number((last.name.match(/Cycle\s*(\d+)/i) || [])[1]);
+      const id = `auto-${start}`;
+      if (s.deleted[id]) delete s.deleted[id];
+      last = { id, name: num ? `Cycle ${num + 1}` : 'Cycle', start, length: 28, targetRank: null, weekNotes: [], entries: {}, ts: {}, metaTs: 0 };
+      s.cycles.push(last);
+    }
+    // Ziel ist immer der Rank nach dem höchsten erreichten (aktueller + zukünftige Cycles)
+    const goalRank = nextRank(s.settings.achievedRank).name;
+    for (const c of s.cycles) if (addDays(c.start, c.length - 1) >= today) c.targetRank = goalRank;
     for (const c of s.cycles) {
       c.entries = c.entries || {};
       c.ts = c.ts || {};
@@ -230,6 +251,10 @@
       }
     }
     out.cycles = [...byId.values()].filter((c) => !out.deleted[c.id]);
+    // Marketing-Bibliothek: pro Eintrag gewinnt die neuere Fassung
+    const mk = new Map((out.marketing || []).map((m) => [m.id, m]));
+    for (const rm of remote.marketing || []) { const lm = mk.get(rm.id); if (!lm || (rm.ts || 0) > (lm.ts || 0)) mk.set(rm.id, clone(rm)); }
+    out.marketing = [...mk.values()];
     return normalize(out);
   }
 
@@ -316,6 +341,90 @@
     save();
   }
 
+  /* ================= Persönlichkeitsentwicklung ================= */
+  // Pro Tag: entries[date].pd = [{ title, note }]; ältere Einträge: entries[date].pd_text (Text oder 1)
+  // "Buchtitel: 61-65" / "Buchtitel 134-144" / "Buch: Chapter 1" -> { title, note }
+  function splitPd(txt) {
+    txt = String(txt || '').trim();
+    const m = txt.match(/^(.*?)[\s:,]*((?:s\.|seiten?|kapitel|chapter)\s*\d.*|\d+\s*[-–]\s*(?:\d+|ende|end|schluss))\s*$/i);
+    if (m && m[1]) return { title: m[1].replace(/[:\s]+$/, ''), note: m[2].trim() };
+    const i = txt.indexOf(':');
+    if (i > 0 && txt.slice(i + 1).trim()) return { title: txt.slice(0, i).trim(), note: txt.slice(i + 1).trim() };
+    return { title: txt, note: '' };
+  }
+  const pdItems = (c, date) => { const v = getVal(c, date, 'pd'); return Array.isArray(v) ? v : []; };
+  const pdLegacy = (c, date) => { const v = getVal(c, date, 'pd_text'); return typeof v === 'string' ? v.trim() : v ? '✓' : ''; };
+  const pdLine = (it) => `${it.title}${it.note ? `: ${it.note}` : ''}`;
+  function pdSummary(c, date) {
+    const parts = pdItems(c, date).map(pdLine), leg = pdLegacy(c, date);
+    if (leg) parts.unshift(leg);
+    return parts.join(' | ');
+  }
+  // Alles, was du schon mal eingetragen hast – zuletzt benutzt zuerst
+  // Ähnliche Titel gelten als dasselbe Buch: Tippfehler ("Advanvement") und Kurzformen
+  // ("Your Rank Advancement" ⊂ "Your Rank Advancement Blueprint")
+  const normTitle = (s) => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss').replace(/[^a-z0-9]/g, '');
+  function lev(a, b) {
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  function similarTitle(a, b) {
+    if (a === b) return true;
+    const [s, l] = a.length <= b.length ? [a, b] : [b, a];
+    if (s.length >= 6 && l.startsWith(s)) return true;
+    return s.length >= 5 && l.length - s.length <= 3 && lev(s, l) <= Math.max(1, Math.floor(s.length * 0.12));
+  }
+  let libCache = null, libCacheKey = '';
+  function pdLibrary() {
+    const key = JSON.stringify(state.cycles.map((c) => c.ts));
+    if (libCache && key === libCacheKey) return libCache;
+    const raw = new Map(); // normalisierter Titel -> Varianten
+    const add = (type, title, date) => {
+      title = String(title || '').trim(); if (!title || title === '✓') return;
+      const k = normTitle(title); if (!k) return;
+      const cur = raw.get(k) || { k, n: 0, last: '', type: 'other', spell: new Map() };
+      cur.n++; if (date > cur.last) cur.last = date;
+      if (type && type !== 'other') cur.type = type;
+      cur.spell.set(title, (cur.spell.get(title) || 0) + 1);
+      raw.set(k, cur);
+    };
+    for (const c of state.cycles) for (const [d, e] of Object.entries(c.entries)) {
+      if (Array.isArray(e.pd)) for (const it of e.pd) add(it.type, it.title, d);
+      if (typeof e.pd_text === 'string') {
+        // "Buchtitel: 61-65" / "Buchtitel 134-144" / "Buch: Chapter 1" -> Titel + Seiten
+        add('book', splitPd(e.pd_text).title, d);
+      }
+    }
+    // Gruppieren (Union-Find über alle ähnlichen Titel)
+    const vs = [...raw.values()], parent = vs.map((_, i) => i);
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < vs.length; i++) for (let j = i + 1; j < vs.length; j++) if (similarTitle(vs[i].k, vs[j].k)) parent[find(i)] = find(j);
+    const groups = new Map();
+    vs.forEach((v, i) => { const r = find(i); (groups.get(r) || groups.set(r, []).get(r)).push(v); });
+    const best = (list) => list.reduce((a, b) => (b.n > a.n || (b.n === a.n && b.k.length > a.k.length) ? b : a));
+    const lib = [...groups.values()].map((g) => {
+      // häufigste Schreibweise; eine längere, oft genutzte Fassung (z. B. mit "Blueprint") gewinnt
+      let main = best(g), ext;
+      while ((ext = g.filter((v) => v.k !== main.k && v.k.startsWith(main.k) && v.n >= main.n * 0.3)).length) main = best(ext);
+      const title = [...main.spell.entries()].reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+      return { title, type: g.some((v) => v.type === 'book') ? 'book' : best(g).type, last: g.reduce((m, v) => (v.last > m ? v.last : m), ''), n: g.reduce((s, v) => s + v.n, 0), keys: g.map((v) => v.k) };
+    });
+    libCache = lib.sort((a, b) => b.last.localeCompare(a.last) || b.n - a.n);
+    libCacheKey = key;
+    return libCache;
+  }
+  // Eingetippten Titel auf das schon bekannte Buch abbilden (gleiche Schreibweise wie bisher)
+  function canonTitle(title) {
+    const k = normTitle(title);
+    const hit = pdLibrary().find((x) => x.keys.some((y) => similarTitle(k, y)));
+    return hit ? hit.title : title;
+  }
+
   /* ================= Rank-Plan ================= */
   function planFor(rankName) {
     const r = rankByName(rankName); if (!r) return null;
@@ -341,7 +450,7 @@
     return 'missing';
   }
   function todoValue(c, date, todo) {
-    if (todo.text) { const v = getVal(c, date, 'pd_text'); return v && String(v).trim() ? 1 : 0; }
+    if (todo.text) return pdItems(c, date).length || pdLegacy(c, date) ? 1 : 0;
     return todo.keys.reduce((s, k) => s + numVal(c, date, k), 0);
   }
   function todoStatus(c, date, todo) {
@@ -368,12 +477,17 @@
   }
 
   /* ================= UI ================= */
-  const VIEWS = ['today', 'cycle', 'settings'];
+  const VIEWS = ['today', 'cycle', 'marketing', 'settings'];
   const pickView = (v) => (VIEWS.includes(v) ? v : 'today');
   const ui = {
     view: pickView(location.hash.slice(1) || lsGet('acc.view')),
     date: todayISO(),
     cycleId: null,
+    mkCat: lsGet('acc.mkCat') || 'start',
+    mkQuery: '',
+    mkEdit: null, // null | 'new' | id
+    mkDraft: null,
+    mkOpen: new Set(),
   };
   const selectedCycle = () => state.cycles.find((c) => c.id === ui.cycleId) || cycleFor(todayISO()) || state.cycles[state.cycles.length - 1];
   const app = $('#app');
@@ -381,7 +495,7 @@
   function render() {
     $$('#tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === ui.view));
     hideTip();
-    ({ today: renderToday, cycle: renderCycle, settings: renderGoals })[ui.view]();
+    ({ today: renderToday, cycle: renderCycle, marketing: renderMarketing, settings: renderGoals })[ui.view]();
   }
   function setView(v) { ui.view = pickView(v); lsSet('acc.view', ui.view); history.replaceState(null, '', `#${ui.view}`); render(); window.scrollTo({ top: 0 }); }
 
@@ -398,6 +512,7 @@
         <div class="row wrap" style="justify-content:center">
           <button class="btn primary" data-action="go-settings">☁ Synchronisierung einrichten</button>
           <button class="btn" data-action="new-cycle" data-start="${date || ''}">＋ Neu starten</button>
+          ${importBtn()}
         </div>
       </div>`;
     }
@@ -428,16 +543,16 @@
   function renderToday() {
     const date = ui.date, c = cycleFor(date), isToday = date === todayISO();
     const head = `<div class="page-head">
-      <div>
+      <div class="head-line">
         <h1>${isToday ? 'Heute' : esc(fmtLong(date))}</h1>
         ${c ? `<div class="sub">Woche ${weekIdx(c, date) + 1} · Tag ${diffDays(c.start, date) + 1}/${c.length}</div>
         <div class="mini-score" id="miniScore">${miniScore(c, date)}</div>` : ''}
       </div>
       <div class="datenav">
         <button class="btn ghost sm" data-action="day" data-delta="-1" aria-label="Vorheriger Tag">‹</button>
-        <span class="label">${esc(fmtDay(date))}</span>
+        <label class="datepick"><span class="label">${esc(fmtDay(date))}<span class="cal" aria-hidden="true">▾</span></span>
+          <input type="date" value="${date}" data-action="pick-date" aria-label="Datum wählen"></label>
         <button class="btn ghost sm" data-action="day" data-delta="1" aria-label="Nächster Tag">›</button>
-        <input type="date" value="${date}" data-action="pick-date" aria-label="Datum wählen">
         ${isToday ? '' : '<button class="btn sm" data-action="go-today">Heute</button>'}
       </div>
     </div>`;
@@ -484,7 +599,8 @@
       <div class="subrows">${CONTACT_KEYS.map((k) => `<div class="subrow"><span>${SHORT[k]}</span>${step(k, SHORT[k])}</div>`).join('')}</div>
       ${row('Testreel', 'testreel', step('instagram_testreels', 'Testreel'))}
       ${row('Story', 'story', step('instagram_stories', 'Story'))}
-      ${row('Persönlichkeitsentwicklung', null, checkBtn(cs.pd[0] > 0, 'data-action="toggle-pd"', 'Persönlichkeitsentwicklung erledigt'))}
+      <div class="trow pd-row"><span class="tlabel">Persönlichkeitsentwicklung</span>${cntSpan('pd', cs)}<span></span></div>
+      <div id="pdBox" class="pd-box">${pdBox(c, date)}</div>
     </section>`;
 
     const weekly = `<section class="card">
@@ -507,8 +623,54 @@
     return (parse(date).getDay() === 0 ? weeklyReportCard(date) : '') + daily + `<div class="groups">${weekly}${cyc}</div>` + outcome;
   }
 
-  function checkBtn(on, attrs, label) {
-    return `<button class="check ${on ? 'on' : ''}" ${attrs} aria-pressed="${on}" aria-label="${esc(label)}">✓</button>`;
+  function pdBox(c, date) {
+    const items = pdItems(c, date), leg = pdLegacy(c, date);
+    const li = (title, note, del) => `<li class="pd-item">
+        <span class="pd-ico" aria-hidden="true">📖</span>
+        <span class="pd-txt"><b>${esc(title)}</b>${note ? `<small>${esc(note)}</small>` : ''}</span>
+        <button type="button" class="pd-del" ${del} aria-label="${esc(title)} entfernen">×</button></li>`;
+    const list = [
+      leg ? li(leg === '✓' ? 'Erledigt (ohne Details)' : splitPd(leg).title, leg === '✓' ? '' : splitPd(leg).note, 'data-action="pd-del-legacy"') : '',
+      ...items.map((it, i) => li(it.title, it.note, `data-action="pd-del" data-i="${i}"`)),
+    ].join('');
+    return `${list ? `<ul class="pd-list">${list}</ul>` : ''}
+      <div class="pd-form">
+        <div class="pd-chips" id="pdChips">${pdChips(c, date, '')}</div>
+        <div class="pd-add">
+          <input class="input" id="pdTitle" type="search" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" placeholder="Was hast du gelesen?" aria-label="Was hast du gelesen oder gehört?">
+          <button type="button" class="btn primary" data-action="pd-add">＋ Eintragen</button>
+        </div>
+      </div>`;
+  }
+  // Vorschläge: alle bisherigen Bücher, beim Tippen gefiltert (wie eine Suche)
+  function pdChips(c, date, query) {
+    const todays = pdItems(c, date).map((i) => normTitle(i.title));
+    const q = normTitle(splitPd(query).title || query);
+    let list = pdLibrary().filter((x) => !todays.some((t) => x.keys.some((y) => similarTitle(t, y))));
+    if (q) {
+      const score = (x) => {
+        const k = normTitle(x.title);
+        if (k.startsWith(q) || x.keys.some((y) => y.startsWith(q))) return 3;
+        if (x.title.toLowerCase().split(/\s+/).some((w) => normTitle(w).startsWith(q))) return 2;
+        if (x.keys.some((y) => y.includes(q))) return 1;
+        return q.length >= 4 && x.keys.some((y) => similarTitle(q, y.slice(0, q.length))) ? 1 : 0;
+      };
+      list = list.map((x) => [x, score(x)]).filter(([, sc]) => sc > 0).sort((a, b) => b[1] - a[1]).map(([x]) => x);
+    }
+    if (!list.length) return q ? '<span class="pd-none">Neues Buch – einfach eintragen</span>' : '';
+    return list.map((x) => `<button type="button" class="pd-chip" data-action="pd-pick" data-title="${esc(x.title)}"><span class="t">${esc(x.title)}</span></button>`).join('');
+  }
+  function pdAdd(c, date) {
+    const ti = $('#pdTitle');
+    const raw = splitPd(ti.value);
+    if (!raw.title) { ti.focus(); toast('Bitte eintragen, was du gelesen / gehört hast'); return; }
+    const title = canonTitle(raw.title);
+    const items = [...pdItems(c, date), { title, ...(raw.note ? { note: raw.note } : {}) }];
+    document.activeElement?.blur?.();
+    setValue(c, date, 'pd', items);
+    $('#pdBox').innerHTML = pdBox(c, date);
+    refreshToday(c, date);
+    toast('Persönlichkeitsentwicklung ✓');
   }
 
   // Wochentext (Mo–So, endet am gewählten Sonntag; über Cycle-Grenzen hinweg)
@@ -561,8 +723,6 @@
     $('#side').innerHTML = sidePanel(c, date);
     const ms = $('#miniScore'); if (ms) ms.innerHTML = miniScore(c, date);
     const rt = $('#reportText'); if (rt) rt.textContent = weekReport(date);
-    const pb = $('[data-action="toggle-pd"]', app);
-    if (pb) { const on = cs.pd[0] > 0; pb.classList.toggle('on', on); pb.setAttribute('aria-pressed', on); }
   }
 
 
@@ -581,11 +741,7 @@
     if (!c) { app.innerHTML = noCycleCard(); return; }
     app.innerHTML = `
       <div class="page-head">
-        <div><h1>${esc(c.name)}</h1><div class="sub">${esc(fmtLong(c.start))} – ${esc(fmtLong(cycleEnd(c)))} · ${c.length} Tage${c.targetRank ? ` · Ziel: ${esc(c.targetRank)}` : ''}</div></div>
-        <div class="row wrap">${cycleSelect(c)}
-          <button class="btn" data-action="export-csv">⇩ CSV</button>
-          <button class="btn primary" data-action="new-cycle">＋ Neuer Cycle</button>
-        </div>
+        <div class="head-line"><h1>${esc(c.name)}</h1><div class="sub">${esc(fmtCycle(c.start))} – ${esc(fmtCycle(cycleEnd(c)))}</div>${c.targetRank ? `<div class="sub" style="flex-basis:100%">Ziel: <strong>${esc(c.targetRank)}</strong></div>` : ''}</div>
       </div>
       <div id="cycleSummary">${cycleSummary(c)}</div>`;
   }
@@ -599,7 +755,6 @@
     const avg = past.length ? Math.round(past.reduce((s, d) => s + dayScore(c, d).pct, 0) / past.length) : 0;
     const kpis = [
       plan ? tile(`BV für ${esc(plan.rank.name)}`, cycleSum(c, ['quali_volume']), plan.need, ' BV') : '',
-      ...CYCLE_TODOS.map((t) => tile(esc(t.label), cycleSum(c, t.keys), g[t.id])),
       `<div class="card kpi"><div class="k-label">Ø tägliche ToDos erledigt</div><div class="k-val">${avg}<small> %</small></div><div class="bar"><span style="width:${avg}%"></span></div></div>`,
     ].join('');
     const curW = cycleFor(today) === c ? weekIdx(c, today) : -1;
@@ -622,7 +777,7 @@
       const v = weekSum(c, t.keys, w), ok = v >= g[t.id];
       return `<span class="wtodo ${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${esc(t.label)} <b>${fmt(v)}/${fmt(g[t.id])}</b></span>`;
     }).join('');
-    const main = [['quali_volume', 'bv', 'BV'], ['quali_starter', 'starter', 'Starter'], ['sales_closing', 'closings', 'Closings']]
+    const main = [['sales_closing', 'closings', 'Closings'], ['quali_starter', 'starter', 'Starter'], ['quali_volume', 'bv', 'BV']]
       .map(([k, p, l]) => (plan ? progRow(l, weekSum(c, [k], w), plan.week[p]) : `<div class="prog"><span class="name">${l}</span><span class="nums"><b>${fmt(weekSum(c, [k], w))}</b></span></div>`)).join('');
     const small = [['sales_nummern', 'nummern', 'Nummern'], ['sales_fcs', 'fcs', 'First Calls'], ['sales_praesis', 'praesis', 'Präsis']]
       .map(([k, p, l]) => `<span>${l} <b>${fmt(weekSum(c, [k], w))}</b>${plan ? `<span class="muted">/${fmt(plan.week[p])}</span>` : ''}</span>`).join('');
@@ -632,9 +787,8 @@
       <div class="daystrip">${strip}</div>
       <div class="muted small" style="margin:6px 0 10px">${full} von ${days.length} Tagen alle ToDos erledigt</div>
       <div class="wtodos">${todos}</div>
-      <div class="divider"></div>
+      <div class="mini-stats top">${small}</div>
       ${main}
-      <div class="mini-stats">${small}</div>
       ${tc || ts ? `<div class="muted small" style="margin-top:6px">Team: <b>${fmt(tc)}</b> Closings · <b>${fmt(ts)}</b> Starter</div>` : ''}
     </section>`;
   }
@@ -643,29 +797,178 @@
 
   const elapsedDays = (c) => { const t = todayISO(); return t < c.start ? 0 : Math.min(c.length, diffDays(c.start, t) + 1); };
 
+  /* ================= MARKETING ================= */
+  // Bibliothek für Texte, Hooks, Ideen und Inspo – state.marketing = [{ id, cat, title, text, url, fav, created, ts }]
+  const MK_CATS = {
+    start: { label: 'Erstnachricht', icon: '👋', hint: 'Erste DM auf TikTok / Insta' },
+    reply: { label: 'Antworten', icon: '💬', hint: 'Wenn sie zurückschreibt' },
+    wa: { label: 'WhatsApp', icon: '📱', hint: 'Nummer, Video, Call ausmachen' },
+    obj: { label: 'Einwände', icon: '🛡️', hint: 'Bedanken – Ergründen – Lösung' },
+    content: { label: 'Content', icon: '💡', hint: 'Hooks, Ideen, Inspo' },
+  };
+  const MK_LEGACY = { dm: 'reply', hook: 'content', idea: 'content', inspo: 'content' };
+  const mkCatOf = (m) => (MK_CATS[m.cat] ? m.cat : MK_LEGACY[m.cat] || 'content');
+  const MK_GUIDE = `<details class="card mk-guide">
+      <summary><b>Leitfaden Einwandbehandlung</b><span class="muted small">antippen</span></summary>
+      <p class="mk-goal">Menschen verstehen und souverän durch die Entscheidung führen. Du bist da, um zu <b>helfen</b> – nicht um zu überzeugen.</p>
+      <div class="mk-blueprint"><span>1 · Bedanken</span><span>2 · Isolieren / Ergründen</span><span>3 · Lösung</span></div>
+      <p class="small"><b>Einwand</b> = Unsicherheit („Ich hab Angst, dass ich es nicht schaffe“) · <b>Vorwand</b> = Schutz („Muss eine Nacht drüber schlafen“). Sag nicht, wie es nicht ist – <b>sag, wie es ist</b>.</p>
+      <div class="mk-dd">
+        <div><h3>Dos</h3><ul><li>Fragen stellen</li><li>Aktiv zuhören & spiegeln</li><li>Kurz bestätigen („macht Sinn“, „verstehe ich“)</li><li>Klar zum nächsten Schritt führen</li><li>Entscheidungen respektieren</li><li>Selbstbewusst, professionell, authentisch</li></ul></div>
+        <div><h3>Don'ts</h3><ul><li>Argumentieren / überzeugen wollen</li><li>Zu lange schreiben statt zum Call</li><li>Emotionale Diskussionen im Chat</li><li>Sofort reagieren ohne zu verstehen</li><li>Kosenamen</li></ul></div>
+      </div>
+      <p class="small"><b>Wunschtechnik:</b> „Angenommen, du hättest xy gelöst und wärst in 6 Monaten an dem Punkt, wo du xy kannst – wie würdest du dich fühlen?“</p>
+      <h3>Persönlichkeitstypen</h3>
+      <div class="mk-types">
+        <div><b>🦈 Hai</b><span>dominant, zielorientiert, kurz & direkt – „Was bringt mir das?“</span><em>→ Ergebnisse & Testimonials zeigen</em></div>
+        <div><b>🦉 Eule</b><span>analytisch, viele Fragen, will Zahlen & Fakten</span><em>→ Sicherheit: System, Schritt für Schritt, messbar</em></div>
+        <div><b>🐬 Delfin</b><span>emotional, redet & lacht viel, Spaß & Team</span><em>→ Community, Events, Retreats, Aftermovie</em></div>
+        <div><b>🐋 Wal</b><span>hilfsbereit, Werte wichtig, sucht Sinn</span><em>→ Community, Support, Mentorship, anderen helfen</em></div>
+      </div>
+    </details>`;
+  function mkFiltered() {
+    const q = ui.mkQuery.trim().toLowerCase();
+    return state.marketing
+      .filter((m) => ui.mkCat === 'all' || mkCatOf(m) === ui.mkCat)
+      .filter((m) => !q || `${m.title} ${m.text} ${m.url}`.toLowerCase().includes(q))
+      .sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || (a.order ? 1 : 0) - (b.order ? 1 : 0) || (a.order || 0) - (b.order || 0) || (b.created || 0) - (a.created || 0));
+  }
+  function mkEditor() {
+    const d = ui.mkDraft || {}, isNew = ui.mkEdit === 'new', cat = MK_CATS[d.cat] ? d.cat : 'start';
+    return `<section class="card mk-editor">
+      <div class="card-head"><h2>${isNew ? 'Neuer Eintrag' : 'Eintrag bearbeiten'}</h2></div>
+      <div class="seg mk-seg" role="radiogroup" aria-label="Kategorie">${Object.entries(MK_CATS).map(([k, v]) => `<button type="button" role="radio" aria-checked="${k === cat}" class="${k === cat ? 'on' : ''}" data-action="mk-draft-cat" data-cat="${k}"><span aria-hidden="true">${v.icon}</span>${v.label.split(' ')[0]}</button>`).join('')}</div>
+      <label class="field">Titel<input class="input" data-mk="title" value="${esc(d.title || '')}" placeholder="z. B. Like auf TikTok" autocomplete="off"></label>
+      <label class="field">Text<textarea class="input" data-mk="text" rows="6" placeholder="Der Text zum Kopieren …">${esc(d.text || '')}</textarea></label>
+      <label class="field">Link (optional)<input class="input" data-mk="url" type="url" inputmode="url" value="${esc(d.url || '')}" placeholder="https://…" autocomplete="off"></label>
+      <div class="row wrap mk-editor-actions">
+        <button type="button" class="btn primary" data-action="mk-save">✓ Speichern</button>
+        <button type="button" class="btn" data-action="mk-cancel">Abbrechen</button>
+        ${isNew ? '' : '<button type="button" class="btn ghost danger" data-action="mk-delete">Löschen</button>'}
+      </div>
+    </section>`;
+  }
+  function mkCard(m) {
+    const cat = MK_CATS[mkCatOf(m)], open = ui.mkOpen.has(m.id), long = (m.text || '').length > 260 || (m.text || '').split('\n').length > 6;
+    let host = '';
+    try { host = m.url ? new URL(m.url).hostname.replace(/^www\./, '') : ''; } catch { host = m.url; }
+    return `<article class="card mk-item ${m.fav ? 'fav' : ''}">
+      <div class="mk-head">
+        ${ui.mkCat === 'all' ? `<span class="mk-cat"><span aria-hidden="true">${cat.icon}</span>${cat.label}</span>` : `<h3 class="mk-title">${esc(m.title || '')}</h3>`}
+        <button type="button" class="mk-star ${m.fav ? 'on' : ''}" data-action="mk-fav" data-id="${m.id}" aria-pressed="${!!m.fav}" aria-label="Favorit">${m.fav ? '★' : '☆'}</button>
+      </div>
+      ${m.title && ui.mkCat === 'all' ? `<h3 class="mk-title">${esc(m.title)}</h3>` : ''}
+      ${m.text ? `<div class="mk-text ${long && !open ? 'clamp' : ''}" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${esc(m.text)}</div>${long ? `<button type="button" class="mk-more" data-action="mk-toggle" data-id="${m.id}">${open ? 'Weniger' : 'Ganzen Text zeigen'}</button>` : ''}` : ''}
+      <div class="mk-actions">
+        ${m.text ? `<button type="button" class="btn primary sm" data-action="mk-copy" data-id="${m.id}">⧉ Kopieren</button>` : ''}
+        ${m.url ? `<a class="btn sm" href="${esc(m.url)}" target="_blank" rel="noopener">↗ ${esc(host || 'Link')}</a>` : ''}
+        <button type="button" class="btn ghost sm" data-action="mk-edit" data-id="${m.id}">Bearbeiten</button>
+      </div>
+    </article>`;
+  }
+  // Content: kompakte Zeile – Text antippen kopiert, ✎ bearbeitet
+  const mkRow = (m) => `<li class="mk-row">
+      <div class="mk-line" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${m.title ? `<b>${esc(m.title)}</b> ` : ''}${esc(m.text || m.url || '')}</div>
+      <button type="button" class="mk-mini" data-action="mk-edit" data-id="${m.id}" aria-label="Bearbeiten">✎</button>
+    </li>`;
+  function mkList() {
+    const items = mkFiltered();
+    if (!state.marketing.length) {
+      return `<div class="card empty mk-empty">
+        <h2>Deine Texte</h2>
+        <p>Sammle hier alles, was du beim Posten und Anschreiben brauchst – und kopiere es mit einem Tipp.</p>
+        <div class="mk-starters">${Object.entries(MK_CATS).map(([k, v]) => `<button type="button" class="mk-starter" data-action="mk-new" data-cat="${k}"><span class="i" aria-hidden="true">${v.icon}</span><b>${v.label}</b><small>${v.hint}</small></button>`).join('')}</div>
+      </div>`;
+    }
+    if (!items.length) return `<div class="card empty"><p>Nichts gefunden.</p></div>`;
+    const cards = items.filter((m) => mkCatOf(m) !== 'content'), rows = items.filter((m) => mkCatOf(m) === 'content');
+    return `${cards.length ? `<div class="mk-list">${cards.map(mkCard).join('')}</div>` : ''}
+      ${rows.length ? `<ul class="card mk-rows">${rows.map(mkRow).join('')}</ul>` : ''}`;
+  }
+  function renderMarketing() {
+    const n = (k) => state.marketing.filter((m) => k === 'all' || mkCatOf(m) === k).length;
+    if (!MK_CATS[ui.mkCat]) ui.mkCat = 'start';
+    const tabs = Object.entries(MK_CATS).map(([k, v]) => [k, v.label, v.icon]);
+    app.innerHTML = `
+      <div class="mk-top">
+        <div class="mk-top-title"><h1>Texte</h1><div class="sub">Text antippen = kopiert</div></div>
+        <input class="mk-search" type="search" data-mk-search value="${esc(ui.mkQuery)}" placeholder="Suchen …" aria-label="Suchen" autocomplete="off">
+        ${ui.mkEdit ? '' : '<button class="mk-plus" data-action="mk-new" aria-label="Eigenen Text hinzufügen" title="Eigenen Text hinzufügen">＋</button>'}
+      </div>
+      ${ui.mkEdit ? mkEditor() : ''}
+      ${state.marketing.length ? `<div class="mk-filters">
+        <div class="mk-cats" role="tablist">${tabs.map(([k, l, i]) => `<button type="button" role="tab" aria-selected="${ui.mkCat === k}" class="mk-cat-btn ${ui.mkCat === k ? 'on' : ''}" data-action="mk-cat" data-cat="${k}">${i ? `<span aria-hidden="true">${i}</span>` : ''}${l}<small>${n(k)}</small></button>`).join('')}</div>
+      </div>` : ''}
+      ${ui.mkCat === 'obj' ? MK_GUIDE : ''}
+      <div id="mkList">${mkList()}</div>`;    const on = $('.mk-cat-btn.on', app); if (on) on.parentNode.scrollLeft = on.offsetLeft - 16;
+  }
+  function mkAction(a, el) {
+    const byId = (id) => state.marketing.find((m) => m.id === id);
+    if (a === 'mk-new') {
+      ui.mkEdit = 'new';
+      ui.mkDraft = { cat: el.dataset.cat || (MK_CATS[ui.mkCat] ? ui.mkCat : 'start'), title: '', text: '', url: '' };
+      render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+      setTimeout(() => $('[data-mk="title"]')?.focus({ preventScroll: true }), 50);
+    } else if (a === 'mk-edit') {
+      const m = byId(el.dataset.id); if (!m) return;
+      ui.mkEdit = m.id; ui.mkDraft = { cat: mkCatOf(m), title: m.title || '', text: m.text || '', url: m.url || '' };
+      render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (a === 'mk-draft-cat') {
+      ui.mkDraft.cat = el.dataset.cat;
+      $$('[data-action="mk-draft-cat"]', app).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
+    } else if (a === 'mk-cancel') {
+      ui.mkEdit = null; ui.mkDraft = null; render();
+    } else if (a === 'mk-save') {
+      const d = ui.mkDraft;
+      d.title = d.title.trim(); d.text = d.text.replace(/\s+$/, ''); d.url = d.url.trim();
+      if (d.url && !/^https?:\/\//i.test(d.url)) d.url = `https://${d.url}`;
+      if (!d.title && !d.text && !d.url) { toast('Bitte Titel, Text oder Link eintragen'); return; }
+      const now = Date.now();
+      if (ui.mkEdit === 'new') state.marketing.push({ id: `m${now}${Math.random().toString(36).slice(2, 6)}`, ...d, fav: false, created: now, ts: now });
+      else { const m = byId(ui.mkEdit); if (m) Object.assign(m, d, { ts: now }); }
+      ui.mkEdit = null; ui.mkDraft = null; save(); render(); toast('Gespeichert');
+    } else if (a === 'mk-delete') {
+      const m = byId(ui.mkEdit);
+      if (m && confirm(`„${m.title || 'Eintrag'}“ löschen?`)) {
+        state.deleted[m.id] = Date.now(); state.marketing = state.marketing.filter((x) => x !== m);
+        ui.mkEdit = null; ui.mkDraft = null; save(); render(); toast('Gelöscht');
+      }
+    } else if (a === 'mk-fav') {
+      const m = byId(el.dataset.id); if (!m) return;
+      m.fav = !m.fav; m.ts = Date.now(); save(); $('#mkList').innerHTML = mkList();
+    } else if (a === 'mk-toggle') {
+      const id = el.dataset.id; if (ui.mkOpen.has(id)) ui.mkOpen.delete(id); else ui.mkOpen.add(id);
+      $('#mkList').innerHTML = mkList();
+    } else if (a === 'mk-copy') {
+      const m = byId(el.dataset.id); if (m) copyText(m.text || m.url, 'Kopiert – jetzt einfügen');
+    } else if (a === 'mk-cat') {
+      ui.mkCat = el.dataset.cat; lsSet('acc.mkCat', ui.mkCat); render();
+    }
+  }
+  function copyText(txt, msg = 'Text kopiert') {
+    const done = () => toast(msg);
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(txt).then(done, () => fallbackCopy(txt, done));
+    else fallbackCopy(txt, done);
+  }
+
   /* ================= ZIELE ================= */
   function renderGoals() {
-    const s = state.settings, g = s.goals, rt = s.rates;
+    const s = state.settings, g = s.goals;
     const achievedIdx = RANKS.findIndex((r) => r.name === s.achievedRank);
     const target = nextRank(s.achievedRank);
-    const plan = planFor(target.name);
     const c = selectedCycle();
     const goalInput = (id, label, unit) => `<label class="field">${label}<div class="row"><input class="input num" inputmode="decimal" data-goal="${id}" value="${g[id]}"><span class="muted small">${unit}</span></div></label>`;
-    const rateInput = (id, label, unit) => `<label class="field">${label}<div class="row"><input class="input num" inputmode="decimal" data-rate="${id}" value="${rt[id]}"><span class="muted small">${unit}</span></div></label>`;
     const ladder = RANKS.map((r, i) => {
-      const p = planFor(r.name);
       const st = i <= achievedIdx ? '<span class="chip st-done">✓ erreicht</span>' : r === target ? '<span class="pill">nächstes Ziel</span>' : '';
       return `<tr class="${r === target ? 'target' : ''} ${i <= achievedIdx ? 'achieved' : ''}">
-        <td>${esc(r.name)}</td><td>${fmt(r.leg)}</td><td>${fmt(r.leg)}</td><td><b>${fmt(r.leg * 2)}</b></td><td>${fmt(p.week.bv)}</td><td>${fmt(p.week.starter)}</td><td>${money(r.pay)}</td><td>${st}</td></tr>`;
+        <td>${esc(r.name)}</td><td>${fmt(r.leg)}</td><td>${fmt(r.leg)}</td><td><b>${fmt(r.leg * 2)}</b></td><td>${money(r.pay)}</td><td>${st}</td></tr>`;
     }).join('');
-    const steps = [
-      ['BV', plan.week.bv, 'pro Woche'], ['Starter', plan.week.starter, `à ${fmt(rt.bvPerStarter)} BV`],
-      ['Closings', plan.week.closings, `${rt.starterPerClosing} % starten`], ['Präsis', plan.week.praesis, `${rt.closingPerPraesi} % werden Closings`],
-      ['First Calls', plan.week.fcs, `${rt.praesiPerFc} % werden Präsis`], ['Nummern', plan.week.nummern, `${rt.fcPerNummer} % werden First Calls`],
-    ];
+    // Was fehlt noch zum nächsten Rank? Ziel − Renewals − im aktuellen Cycle gesammeltes BV
+    const cur = cycleFor(todayISO()) || state.cycles[state.cycles.length - 1];
+    const goalBV = target.leg * 2, base = s.baseBV || 0, got = cur ? cycleSum(cur, ['quali_volume']) : 0;
+    const missing = Math.max(0, goalBV - base - got);
     app.innerHTML = `
-      <div class="page-head"><div><h1>Einstellungen</h1><div class="sub">Rank, Wochenziele und Export</div></div>
-        <button class="btn primary" data-action="export-xlsx">⇩ Alles exportieren (Excel)</button></div>
+      <div class="page-head"><div><h1>Einstellungen</h1><div class="sub">Rank, Wochenziele und Export</div></div></div>
       <div class="stack">
         <section class="card">
           <div class="card-head"><h2>Dein Rank</h2></div>
@@ -681,24 +984,18 @@
               <div class="small">${fmt(target.leg)} BV links + ${fmt(target.leg)} BV rechts = <b>${fmt(target.leg * 2)} BV</b> pro Cycle · ${money(target.pay)} Residual</div>
             </div>
           </div>
-          <h3 class="sub-h">Dein Wochenziel für ${esc(target.name)}</h3>
-          <div class="plan">${steps.map(([l, v, sub], i) => `<div class="plan-step">${i ? '<span class="arrow" aria-hidden="true">←</span>' : ''}<div class="pv">${fmt(v)}</div><div class="pl">${l}</div><div class="ps">${sub}</div></div>`).join('')}</div>
-          <p class="hint">Gerechnet: (${fmt(plan.total)} BV${s.baseBV ? ` − ${fmt(s.baseBV)} BV bereits vorhanden` : ''}) ÷ 4 Wochen = ${fmt(plan.week.bv)} BV pro Woche, aufgerundet. Danach rückwärts über deine Quoten bis zu den Nummern. Das Wochenziel gilt für den aktuellen und alle neuen Cycles.</p>
-          <div class="set-grid">
-            <label class="field">BV, das schon da ist (Team / Renewals) pro Cycle<div class="row"><input class="input num" inputmode="decimal" data-base value="${s.baseBV || 0}"><span class="muted small">BV</span></div></label>
-            ${rateInput('bvPerStarter', 'BV pro Starter', 'BV')}
-            ${rateInput('starterPerClosing', 'Closings → Starter', '%')}
-            ${rateInput('closingPerPraesi', 'Präsis → Closings', '%')}
-            ${rateInput('praesiPerFc', 'First Calls → Präsis', '%')}
-            ${rateInput('fcPerNummer', 'Nummern → First Calls', '%')}
+          <label class="field base-bv">BV Renewals – schon am Anfang des Cycles da<div class="row"><input class="input num" inputmode="decimal" data-base value="${s.baseBV || 0}"><span class="muted small">BV</span></div></label>
+          <div class="gap-box ${missing ? '' : 'done'}">
+            <span class="gap-label">Fehlt noch</span>
+            <span class="gap-val">${missing ? `${fmt(missing)} BV` : '✓ Geschafft'}</span>
+            <span class="gap-pct">${missing ? `${Math.round((missing / goalBV) * 100)} %` : '100 %'}</span>
           </div>
-          <div class="row" style="margin-top:12px"><button class="btn sm" data-action="rates-history">Quoten aus meiner Historie berechnen</button></div>
         </section>
 
         <section class="card">
-          <div class="card-head"><h2>Rank-Übersicht</h2><span class="hint">Linkes + rechtes Bein zusammen</span></div>
-          <div class="tbl-wrap"><table class="tbl rank-tbl">
-            <thead><tr><th>Rank</th><th>BV links</th><th>BV rechts</th><th>BV gesamt</th><th>BV / Woche</th><th>Starter / Woche</th><th>Residual / Cycle</th><th></th></tr></thead>
+          <div class="card-head"><h2>Rank-Übersicht</h2></div>
+          <div class="tbl-wrap rank-wrap"><table class="tbl rank-tbl">
+            <thead><tr><th>Rank</th><th>BV links</th><th>BV rechts</th><th>BV gesamt</th><th>Residual / Cycle</th><th></th></tr></thead>
             <tbody>${ladder}</tbody></table></div>
         </section>
 
@@ -716,17 +1013,7 @@
           </div>
         </section>
 
-        ${c ? `<section class="card">
-          <div class="card-head"><h2>Cycle bearbeiten</h2><div class="row">${cycleSelect(c)}<button class="btn sm danger" data-action="delete-cycle">Löschen</button></div></div>
-          <div class="set-grid">
-            <label class="field">Name<input class="input" data-set="name" value="${esc(c.name)}"></label>
-            <label class="field">Start<input class="input" type="date" data-set="start" value="${c.start}"></label>
-            <label class="field">Länge (Tage)<input class="input" type="number" min="1" max="120" data-set="length" value="${c.length}"></label>
-            <label class="field">Rank-Ziel dieses Cycles
-              <select class="input" data-set="targetRank"><option value="">kein Rank-Ziel</option>${RANKS.map((r) => `<option ${r.name === c.targetRank ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
-          </div>
-          <div class="row" style="margin-top:12px"><button class="btn primary" data-action="new-cycle">＋ Neuen Cycle starten</button></div>
-        </section>` : noCycleCard()}
+        ${c ? '' : noCycleCard()}
 
         ${syncCard()}
 
@@ -735,11 +1022,16 @@
           <div class="row wrap">
             <button class="btn primary" data-action="export-xlsx">⇩ Alles exportieren (Excel)</button>
             <button class="btn" data-action="export-json">⇩ Backup herunterladen</button>
+            ${importBtn()}
             <label class="btn">⇧ Backup wiederherstellen<input type="file" accept=".json,application/json" data-action="import-json" hidden></label>
             ${window.SEED_DATA ? '<button class="btn danger" data-action="reset-seed">Excel-Daten neu laden</button>' : ''}
           </div>
+          <p class="hint" style="margin-bottom:0">Excel importieren: deine alte Accountability-Excel (ein Blatt pro Cycle) oder ein Export aus dieser App. Bereits eingetragene Werte bleiben erhalten – es werden nur leere Felder ergänzt.</p>
         </section>
       </div>`;
+  }
+  function importBtn() {
+    return `<label class="btn">⇧ Excel importieren<input type="file" accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" data-action="import-xlsx" hidden></label>`;
   }
 
   function syncCard() {
@@ -748,7 +1040,6 @@
         <div class="card-head"><h2>Synchronisierung</h2><span class="chip st-done">✓ aktiv</span></div>
         <div class="muted small">GitHub: @${esc(sync.user || '')}${lastSync ? ` · zuletzt ${pad(lastSync.getHours())}:${pad(lastSync.getMinutes())}` : ''}</div>
         <div class="row wrap" style="margin-top:12px">
-          <button class="btn" data-action="sync-now">↻ Jetzt synchronisieren</button>
           <button class="btn ghost danger" data-action="sync-disconnect">Trennen</button>
         </div>
       </section>`;
@@ -793,7 +1084,7 @@
     const lines = [['Datum', 'Tag', ...cols.map(colLabel)].map(q).join(';')];
     for (const d of cycleDates(c)) {
       lines.push([fmtShort(d) + parse(d).getFullYear(), WD[parse(d).getDay()], ...cols.map((k) => {
-        const v = k === '__contacts' ? todoValue(c, d, DAILY_TODOS[1]) : getVal(c, d, k);
+        const v = cellOut(c, d, k);
         return typeof v === 'number' ? String(v).replace('.', ',') : v ?? '';
       })].map(q).join(';'));
     }
@@ -820,7 +1111,7 @@
   }
   function cellOut(c, d, k) {
     if (k === '__contacts') return todoValue(c, d, DAILY_TODOS[1]) || '';
-    if (k === 'pd_text') { const v = getVal(c, d, k); return typeof v === 'string' ? v : v ? '✓' : ''; }
+    if (k === 'pd_text') return pdSummary(c, d);
     const v = getVal(c, d, k); return typeof v === 'number' ? v : '';
   }
   async function exportXLSX() {
@@ -868,6 +1159,54 @@
     }
   }
 
+  /* ---------- Excel-Import (vergangene Ergebnisse) ---------- */
+  async function importXLSX(file) {
+    let X;
+    try { toast('Excel wird gelesen …'); X = await loadXLSX(); } catch { toast('Für den Excel-Import wird Internet benötigt'); return; }
+    let found;
+    try { found = window.parseAccountabilityWorkbook(X, X.read(await file.arrayBuffer(), { cellDates: true })); } catch { toast('Excel-Datei konnte nicht gelesen werden'); return; }
+    found = found.filter((x) => Object.keys(x.entries).length);
+    if (!found.length) { toast('Keine Tagesdaten in der Datei gefunden'); return; }
+    const days = found.reduce((s, x) => s + Object.keys(x.entries).length, 0);
+    const list = found.map((x) => `• ${x.name} (ab ${fmtShort(x.start)}${x.start.slice(0, 4)})`).join('\n');
+    if (!confirm(`${found.length} ${found.length === 1 ? 'Cycle' : 'Cycles'} mit ${days} eingetragenen Tagen gefunden:\n${list}\n\nImportieren? Bereits eingetragene Werte bleiben erhalten, nur leere Felder werden ergänzt.`)) return;
+
+    const now = Date.now(), today = todayISO();
+    let added = 0, merged = 0, skipped = 0;
+    const overlapsAny = (s, e) => state.cycles.some((c) => c.start <= e && cycleEnd(c) >= s);
+    const addCycle = (name, start, length) => {
+      const end = addDays(start, length - 1);
+      const c = { id: `x${now}_${added}`, name: state.cycles.some((x) => x.name === name) ? `${name} (Import)` : name, start, length,
+        targetRank: end >= today ? nextRank(state.settings.achievedRank).name : null, weekNotes: [], entries: {}, ts: {}, metaTs: now };
+      state.cycles.push(c); added++; normalize();
+      return c;
+    };
+    const put = (c, d, e) => {
+      const cur = c.entries[d] || {};
+      let changed = false;
+      for (const [k, v] of Object.entries(e)) {
+        if (k === 'pd_text' && (cur.pd_text || (Array.isArray(cur.pd) && cur.pd.length))) continue;
+        if (cur[k] === undefined || cur[k] === null || cur[k] === '') { cur[k] = v; changed = true; }
+      }
+      if (changed) { c.entries[d] = cur; c.ts[d] = now; merged++; }
+    };
+    for (const imp of found) {
+      if (!overlapsAny(imp.start, addDays(imp.start, imp.length - 1))) addCycle(imp.name, imp.start, imp.length);
+      // Jeden Tag in den Cycle schreiben, der dieses Datum enthält
+      const loose = [];
+      for (const [d, e] of Object.entries(imp.entries)) { const c = cycleFor(d); if (c) put(c, d, e); else loose.push(d); }
+      // Tage außerhalb aller Cycles: eigener Cycle, falls der Zeitraum frei ist
+      if (loose.length) {
+        loose.sort();
+        const s = loose[0], l = diffDays(s, loose[loose.length - 1]) + 1;
+        if (!overlapsAny(s, addDays(s, l - 1))) { const c = addCycle(imp.name, s, l); for (const d of loose) put(c, d, imp.entries[d]); }
+        else skipped += loose.length;
+      }
+    }
+    normalize(); save(); ui.cycleId = null; render();
+    toast(`Import fertig: ${added} neue ${added === 1 ? 'Cycle' : 'Cycles'}, ${merged} Tage ergänzt${skipped ? `, ${skipped} übersprungen` : ''}`);
+  }
+
   /* ---------- Toast & Tooltip ---------- */
   let toastTimer;
   function toast(t) {
@@ -889,6 +1228,7 @@
   app.addEventListener('click', (e) => {
     const el = e.target.closest('[data-action]'); if (!el) return;
     const a = el.dataset.action;
+    if (a.startsWith('mk-')) { mkAction(a, el); return; }
     if (a === 'day') { ui.date = addDays(ui.date, Number(el.dataset.delta)); render(); }
     else if (a === 'go-today') { ui.date = todayISO(); render(); }
     else if (a === 'step') {
@@ -899,9 +1239,20 @@
       const inp = $(`input[data-key="${key}"]`, app); if (inp) inp.value = nv;
       refreshToday(c, ui.date);
     }
-    else if (a === 'toggle-pd') {
+    else if (a === 'pd-pick') {
       const c = cycleFor(ui.date); if (!c) return;
-      setValue(c, ui.date, 'pd_text', todoValue(c, ui.date, DAILY_TODOS[4]) ? null : 1);
+      const ti = $('#pdTitle'), note = splitPd(ti.value).note;
+      ti.value = `${el.dataset.title} ${note}`.trimEnd() + (note ? '' : ' ');
+      $('#pdChips').innerHTML = pdChips(c, ui.date, el.dataset.title);
+      ti.focus({ preventScroll: true });
+      const n = ti.value.length; try { ti.setSelectionRange(n, n); } catch { /* type=search */ }
+    }
+    else if (a === 'pd-add') { const c = cycleFor(ui.date); if (c) pdAdd(c, ui.date); }
+    else if (a === 'pd-del' || a === 'pd-del-legacy') {
+      const c = cycleFor(ui.date); if (!c) return;
+      if (a === 'pd-del') { const items = pdItems(c, ui.date).filter((_, i) => i !== Number(el.dataset.i)); setValue(c, ui.date, 'pd', items.length ? items : null); }
+      else setValue(c, ui.date, 'pd_text', null);
+      $('#pdBox').innerHTML = pdBox(c, ui.date);
       refreshToday(c, ui.date);
     }
     else if (a === 'copy-report') {
@@ -936,6 +1287,9 @@
 
   app.addEventListener('input', (e) => {
     const t = e.target;
+    if (t.id === 'pdTitle') { const c = cycleFor(ui.date); if (c) { $('#pdChips').innerHTML = pdChips(c, ui.date, t.value); $('#pdChips').scrollLeft = 0; } return; }
+    if (t.dataset.mk && ui.mkDraft) { ui.mkDraft[t.dataset.mk] = t.value; return; }
+    if (t.dataset.mkSearch !== undefined) { ui.mkQuery = t.value; $('#mkList').innerHTML = mkList(); return; }
     if (ui.view === 'today' && t.dataset.key) {
       const c = cycleFor(ui.date); if (!c) return;
       const key = t.dataset.key;
@@ -952,10 +1306,10 @@
     if (a === 'pick-date' && t.value) { ui.date = t.value; render(); return; }
     if (a === 'achieved-rank') {
       s.achievedRank = t.value || null; touchSettings();
-      const nr = nextRank(s.achievedRank).name, today = todayISO();
-      for (const c of state.cycles) if (cycleEnd(c) >= today) { c.targetRank = nr; touchCycle(c); } // aktueller + zukünftige Cycles
-      save(); render(); toast(`Nächstes Ziel: ${nr}`); return;
+      const nr = nextRank(s.achievedRank).name;
+      normalize(); save(); render(); toast(`Nächstes Ziel: ${nr}`); return;
     }
+    if (a === 'import-xlsx') { const f = t.files[0]; t.value = ''; if (f) importXLSX(f); return; }
     if (a === 'import-json') {
       const f = t.files[0]; if (!f) return;
       f.text().then((txt) => {
@@ -963,28 +1317,30 @@
         if (!d || !Array.isArray(d.cycles)) throw new Error('format');
         if (!confirm(`Backup mit ${d.cycles.length} Cycles laden? Die aktuellen Daten werden ersetzt.`)) return;
         state = migrate(d); normalize(); ui.cycleId = null; save(); render(); toast('Backup wiederhergestellt');
-      }).catch(() => toast('Datei konnte nicht gelesen werden'));
+      }).catch(() => toast('Datei konnte nicht gelesen werden')).finally(() => { t.value = ''; });
       return;
     }
     if (t.dataset.goal) { const v = parseNum(t.value); if (v !== null && v >= 0) s.goals[t.dataset.goal] = v; touchSettings(); save(); return; }
     if (t.dataset.rate) { const v = parseNum(t.value); if (v !== null && v > 0) s.rates[t.dataset.rate] = v; touchSettings(); save(); render(); return; }
     if (t.dataset.base !== undefined) { s.baseBV = Math.max(0, parseNum(t.value) || 0); touchSettings(); save(); render(); return; }
-    if (t.dataset.set) {
-      const c = selectedCycle(), k = t.dataset.set;
-      if (k === 'name') c.name = t.value.trim() || c.name;
-      if (k === 'start' && t.value) c.start = t.value;
-      if (k === 'length') { const n = Math.round(parseNum(t.value)); if (n > 0 && n <= 120) c.length = n; }
-      if (k === 'targetRank') c.targetRank = t.value || null;
-      touchCycle(c); normalize(); save(); render();
-    }
   });
 
   app.addEventListener('keydown', (e) => {
     const t = e.target;
+    if (e.key === 'Enter' && t.id === 'pdTitle') {
+      e.preventDefault();
+      const c = cycleFor(ui.date); if (c) pdAdd(c, ui.date);
+      return;
+    }
     if (ui.view === 'today' && t.matches('.stepper input') && e.key === 'Enter') {
       const all = $$('.stepper input', app), i = all.indexOf(t);
       if (all[i + 1]) { all[i + 1].focus(); all[i + 1].select(); }
     }
+  });
+  // Datum: Tippen auf die Datumsanzeige öffnet den Kalender
+  app.addEventListener('click', (e) => {
+    const d = e.target.closest('input[type=date]');
+    if (d && typeof d.showPicker === 'function') { try { d.showPicker(); } catch { /* Browser öffnet selbst */ } }
   });
   app.addEventListener('focusin', (e) => { if (e.target.matches('.stepper input, td.c input')) e.target.select(); });
   document.addEventListener('keydown', (e) => {
@@ -994,6 +1350,23 @@
   });
   app.addEventListener('mousemove', (e) => { const g = e.target.closest('[data-tip]'); if (g) showTip(g.dataset.tip, e.clientX, e.clientY); else hideTip(); });
   app.addEventListener('mouseleave', hideTip);
+
+  // Handy: kein Zoom durch schnelles Doppeltippen oder Zwei-Finger-Geste (iOS ignoriert user-scalable=no)
+  ['gesturestart', 'gesturechange'].forEach((t) => document.addEventListener(t, (e) => e.preventDefault(), { passive: false }));
+  let lastTouchEnd = 0, touchX = 0, touchY = 0, touchMoved = false;
+  document.addEventListener('touchstart', (e) => { const t = e.touches[0]; touchX = t.clientX; touchY = t.clientY; touchMoved = e.touches.length > 1; }, { passive: true });
+  document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false }); // kein Pinch-Zoom
+  document.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (Math.abs(t.clientX - touchX) > 10 || Math.abs(t.clientY - touchY) > 10) touchMoved = true; }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (touchMoved) { lastTouchEnd = 0; return; }
+    if (now - lastTouchEnd < 350 && !e.target.closest('input, textarea, select')) {
+      e.preventDefault();
+      const b = e.target.closest('button, label.btn, [data-action]');
+      if (b && !b.matches('input')) b.click(); // schneller zweiter Tipp zählt trotzdem
+    }
+    lastTouchEnd = now;
+  }, { passive: false });
 
   /* ---------- Theme ---------- */
   function applyTheme(t) { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
@@ -1005,7 +1378,7 @@
   });
 
   let lastToday = todayISO();
-  setInterval(() => { const t = todayISO(); if (t !== lastToday) { if (ui.date === lastToday) ui.date = t; lastToday = t; render(); } }, 60000);
+  setInterval(() => { const t = todayISO(); if (t !== lastToday) { if (ui.date === lastToday) ui.date = t; lastToday = t; normalize(); save(); render(); } }, 60000);
 
   // Sync: beim Öffnen, beim Zurückkehren zur App und alle 30 s
   app.addEventListener('focusout', () => {
@@ -1015,7 +1388,9 @@
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') runSync(); });
   window.addEventListener('online', () => runSync());
-  setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 30000);
+  window.addEventListener('focus', () => runSync());
+  window.addEventListener('pageshow', (e) => { if (e.persisted) runSync(); });
+  setInterval(() => { if (document.visibilityState === 'visible') runSync(); }, 20000);
 
   const firstRun = !lsGet(STORE_KEY);
   save();
