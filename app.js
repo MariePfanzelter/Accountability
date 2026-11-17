@@ -647,6 +647,15 @@
 
   // Häufige BV-Beträge zum Antippen (werden zum Tageswert addiert); anderer Betrag direkt ins Feld
   const BV_AMOUNTS = [250, 220, 1025];
+  // BV: Feld = Tageswert, Dropdown addiert einen festen Betrag oder springt ins Feld für einen anderen Betrag
+  const bvField = (c, date) => `<div class="stepper bv-step">
+      <input inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="0" aria-label="Volumen (BV)">
+      <select class="bv-sel" data-action="bv-pick" aria-label="BV hinzufügen">
+        <option value="" selected>+ ▾</option>
+        ${BV_AMOUNTS.map((n) => `<option value="${n}">+ ${fmt(n)} BV</option>`).join('')}
+        <option value="other">Anderer Betrag …</option>
+      </select>
+    </div>`;
   function todayMain(c, date) {
     const cs = counts(c, date);
     const row = (label, cntId, inner) => `<div class="trow"><span class="tlabel">${esc(label)}</span>${cntId ? cntSpan(cntId, cs) : '<span></span>'}${inner}</div>`;
@@ -681,14 +690,7 @@
 
     const outcome = `<section class="card">
       <div class="card-head"><h2>Outcome</h2></div>
-      <div class="two-col">${METRICS.filter((m) => (m.section === 'outcome' || m.section === 'team') && m.key !== 'quali_volume').map((m) => row(m.section === 'team' ? m.short : m.label, null, step(m.key, m.label))).join('')}
-        <div class="trow bv-row"><span class="tlabel">Volumen (BV)</span>
-          <div class="bv-box">
-            <input class="bv-input" inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="Betrag" aria-label="Volumen (BV)">
-            ${BV_AMOUNTS.map((n) => `<button type="button" class="bv-chip" data-action="bv-add" data-v="${n}">+${fmt(n)}</button>`).join('')}
-          </div>
-        </div>
-      </div>
+      <div class="two-col">${METRICS.filter((m) => m.section === 'outcome' || m.section === 'team').map((m) => row(m.section === 'team' ? m.short : m.label, null, m.key === 'quali_volume' ? bvField(c, date) : step(m.key, m.label))).join('')}</div>
     </section>`;
 
     return (parse(date).getDay() === 0 ? weeklyReportCard(date) : '') + daily + `<div class="groups">${weekly}${cyc}</div>` + outcome;
@@ -1323,14 +1325,6 @@
       } else setValue(c, ui.date, 'pro_cycle_followups', 1);
       render();
     }
-    else if (a === 'bv-add') {
-      const c = cycleFor(ui.date); if (!c) return;
-      const nv = numVal(c, ui.date, 'quali_volume') + Number(el.dataset.v);
-      setValue(c, ui.date, 'quali_volume', nv);
-      const inp = $('input[data-key="quali_volume"]', app); if (inp) inp.value = nv;
-      refreshToday(c, ui.date);
-      toast(`+${fmt(Number(el.dataset.v))} BV`);
-    }
     else if (a === 'step') {
       const c = cycleFor(ui.date); if (!c) return;
       const key = el.dataset.key;
@@ -1404,6 +1398,18 @@
     const t = e.target, a = t.dataset.action, s = state.settings;
     if (a === 'pick-cycle') { ui.cycleId = t.value; render(); return; }
     if (a === 'pick-date' && t.value) { ui.date = t.value; render(); return; }
+    if (a === 'bv-pick') {
+      const c = cycleFor(ui.date), v = t.value; t.value = '';
+      const inp = $('input[data-key="quali_volume"]', app);
+      if (!c || !v) return;
+      if (v === 'other') { if (inp) { inp.focus(); inp.select(); } return; }
+      const nv = numVal(c, ui.date, 'quali_volume') + Number(v);
+      setValue(c, ui.date, 'quali_volume', nv);
+      if (inp) inp.value = nv;
+      refreshToday(c, ui.date);
+      toast(`+${fmt(Number(v))} BV`);
+      return;
+    }
     if (a === 'achieved-rank') {
       s.achievedRank = t.value || null; touchSettings();
       const nr = nextRank(s.achievedRank).name;
