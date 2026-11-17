@@ -480,7 +480,7 @@
   const VIEWS = ['today', 'cycle', 'marketing', 'settings'];
   const pickView = (v) => (VIEWS.includes(v) ? v : 'today');
   const ui = {
-    view: pickView(location.hash.slice(1) || lsGet('acc.view')),
+    view: 'today', // Startseite ist immer „Heute“
     date: todayISO(),
     cycleId: null,
     mkCat: lsGet('acc.mkCat') || 'start',
@@ -616,8 +616,8 @@
     </section>`;
 
     const outcome = `<section class="card">
-      <div class="card-head"><h2>Outcome</h2><span class="muted small">Woche</span></div>
-      <div class="two-col">${METRICS.filter((m) => m.section === 'outcome' || m.section === 'team').map((m) => row(m.section === 'team' ? m.short : m.label, m.key, step(m.key, m.label))).join('')}</div>
+      <div class="card-head"><h2>Outcome</h2></div>
+      <div class="two-col">${METRICS.filter((m) => m.section === 'outcome' || m.section === 'team').map((m) => row(m.section === 'team' ? m.short : m.label, null, step(m.key, m.label))).join('')}</div>
     </section>`;
 
     return (parse(date).getDay() === 0 ? weeklyReportCard(date) : '') + daily + `<div class="groups">${weekly}${cyc}</div>` + outcome;
@@ -1395,6 +1395,7 @@
   const firstRun = !lsGet(STORE_KEY);
   save();
   if (firstRun && state.cycles.length && window.SEED_DATA) setTimeout(() => toast(`${state.cycles.length} Cycles aus deiner Excel übernommen`), 300);
+  if (location.hash && location.hash !== '#today') history.replaceState(null, '', '#today');
   render();
   if (sync?.gistId) runSync();
 })();
