@@ -645,6 +645,8 @@
     return `<span class="cnt ${goal != null && v >= goal ? 'ok' : ''}" data-cnt="${id}">${cntHTML(cs[id])}</span>`;
   }
 
+  // Häufige BV-Beträge zum Antippen (werden zum Tageswert addiert); anderer Betrag direkt ins Feld
+  const BV_AMOUNTS = [250, 220, 1025];
   function todayMain(c, date) {
     const cs = counts(c, date);
     const row = (label, cntId, inner) => `<div class="trow"><span class="tlabel">${esc(label)}</span>${cntId ? cntSpan(cntId, cs) : '<span></span>'}${inner}</div>`;
@@ -679,7 +681,14 @@
 
     const outcome = `<section class="card">
       <div class="card-head"><h2>Outcome</h2></div>
-      <div class="two-col">${METRICS.filter((m) => m.section === 'outcome' || m.section === 'team').map((m) => row(m.section === 'team' ? m.short : m.label, null, step(m.key, m.label))).join('')}</div>
+      <div class="two-col">${METRICS.filter((m) => (m.section === 'outcome' || m.section === 'team') && m.key !== 'quali_volume').map((m) => row(m.section === 'team' ? m.short : m.label, null, step(m.key, m.label))).join('')}
+        <div class="trow bv-row"><span class="tlabel">Volumen (BV)</span>
+          <div class="bv-box">
+            <input class="bv-input" inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="Betrag" aria-label="Volumen (BV)">
+            ${BV_AMOUNTS.map((n) => `<button type="button" class="bv-chip" data-action="bv-add" data-v="${n}">+${fmt(n)}</button>`).join('')}
+          </div>
+        </div>
+      </div>
     </section>`;
 
     return (parse(date).getDay() === 0 ? weeklyReportCard(date) : '') + daily + `<div class="groups">${weekly}${cyc}</div>` + outcome;
@@ -1313,6 +1322,14 @@
         for (const d of Object.keys(c.entries)) if (c.entries[d]?.pro_cycle_followups != null) setValue(c, d, 'pro_cycle_followups', null);
       } else setValue(c, ui.date, 'pro_cycle_followups', 1);
       render();
+    }
+    else if (a === 'bv-add') {
+      const c = cycleFor(ui.date); if (!c) return;
+      const nv = numVal(c, ui.date, 'quali_volume') + Number(el.dataset.v);
+      setValue(c, ui.date, 'quali_volume', nv);
+      const inp = $('input[data-key="quali_volume"]', app); if (inp) inp.value = nv;
+      refreshToday(c, ui.date);
+      toast(`+${fmt(Number(el.dataset.v))} BV`);
     }
     else if (a === 'step') {
       const c = cycleFor(ui.date); if (!c) return;

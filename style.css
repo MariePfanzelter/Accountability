@@ -867,3 +867,17 @@ input.mk-search::-webkit-search-cancel-button { display: none; }
 }
 .acc-copy svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
 .acc-copy:active { transform: scale(.94); }
+
+/* ============ BV: feste Beträge antippen + freier Betrag ============ */
+.two-col .trow.bv-row { grid-column: 1 / -1; grid-template-columns: 1fr; grid-template-areas: "l" "s"; }
+.bv-box { grid-area: s; display: grid; grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(0, 1fr)); gap: 6px; }
+.bv-input {
+  min-width: 0; height: 40px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface);
+  text-align: center; font-weight: 600; font-size: 16px; color: var(--text);
+}
+.bv-input:focus { outline: none; border-color: var(--accent); background: var(--accent-soft); }
+.bv-chip {
+  min-width: 0; height: 40px; border: 1px solid var(--border-strong); border-radius: 99px; background: var(--surface);
+  color: var(--accent); font-weight: 700; font-size: .85rem; white-space: nowrap; padding: 0 4px;
+}
+.bv-chip:active { transform: scale(.94); background: var(--accent-soft); }
