@@ -648,9 +648,9 @@
   // Häufige BV-Beträge zum Antippen (werden zum Tageswert addiert); anderer Betrag direkt ins Feld
   const BV_AMOUNTS = [250, 220, 1025];
   // BV: Feld = Tageswert, Dropdown addiert einen festen Betrag oder springt ins Feld für einen anderen Betrag
-  const bvField = (c, date) => `<div class="bv-wrap">
-      <input class="bv-input" inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="0" aria-label="Volumen (BV) heute">
-      <label class="bv-add"><span>＋ BV hinzufügen</span>
+  const bvField = (c, date) => `<div class="stepper bv-step">
+      <input inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="0" aria-label="Volumen (BV) heute">
+      <label class="bv-plus" title="BV hinzufügen"><span aria-hidden="true">+</span>
         <select data-action="bv-pick" aria-label="BV hinzufügen">
           <option value="" selected disabled hidden>BV hinzufügen</option>
           ${BV_AMOUNTS.map((n) => `<option value="${n}">${fmt(n)} BV</option>`).join('')}
