@@ -442,6 +442,34 @@
   }
 
   /* ================= Status ================= */
+  // Tages-Accountability als Text zum Kopieren (Grundliste immer, Extras nur wenn eingetragen)
+  function accountabilityText(c, date) {
+    const v = (k) => { const n = numVal(c, date, k); return n ? String(n).replace('.', ',') : ''; };
+    const d = parse(date);
+    const lines = [
+      `Accountability ${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}:`,
+      `TT gepostet: ${v('tiktok_gepostet')}`,
+      `TT liker: ${v('tiktok_liker')}`,
+      `TT KA: ${v('tiktok_ka')}`,
+      `TT/IG Neue Follower: ${v('tiktok_neue_follower')}`,
+      `IG Testreels: ${v('instagram_testreels')}`,
+      `IG akquise: ${v('instagram_testreelliker')}`,
+      `IG Story: ${v('instagram_stories')}`,
+      `Numbers: ${v('sales_nummern')}`,
+      `FC: ${v('sales_fcs')}`,
+      `Präsis: ${v('sales_praesis')}`,
+      `Closings: ${v('sales_closing')}`,
+      `Starter: ${v('quali_starter')}`,
+      `Volume: ${v('quali_volume')}`,
+      `Neins: ${v('sales_neins')}`,
+      `Checkups: ${v('pro_cycle_checkups')}`,
+    ];
+    const extras = [['instagram_sprechstories', 'Sprechstory'], ['tiktok_sprechtiktoks', 'Sprech-TikTok'], ['sales_fu_closing', 'FU Closings'],
+      ['pro_cycle_followups', 'Kontakte nachgefasst'], ['pro_cycle_offline_meetings', 'Offline Meeting'], ['team_closing', 'Team Closings'], ['team_starter', 'Team Starter']];
+    for (const [k, l] of extras) if (numVal(c, date, k)) lines.push(`${l}: ${v(k)}`);
+    lines.push(`Persönlichkeitsentwicklung: ${todoValue(c, date, DAILY_TODOS[4]) ? '✅' : ''}`);
+    return lines.join('\n');
+  }
   function ratioStatus(v, goal) {
     const r = goal > 0 ? v / goal : 0;
     if (r >= 1) return 'done';
@@ -542,7 +570,8 @@
   /* ================= HEUTE ================= */
   function renderToday() {
     const date = ui.date, c = cycleFor(date), isToday = date === todayISO();
-    const head = `<div class="page-head">
+    const head = `<div class="page-head has-copy">
+      ${c ? '<button class="acc-copy" data-action="copy-acc" aria-label="Accountability kopieren" title="Accountability kopieren"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg></button>' : ''}
       <div class="head-line">
         <h1>${isToday ? 'Heute' : esc(fmtLong(date))}</h1>
         ${c ? `<div class="sub">Woche ${weekIdx(c, date) + 1} · Tag ${diffDays(c.start, date) + 1}/${c.length}</div>
@@ -1231,6 +1260,7 @@
     if (a.startsWith('mk-')) { mkAction(a, el); return; }
     if (a === 'day') { ui.date = addDays(ui.date, Number(el.dataset.delta)); render(); }
     else if (a === 'go-today') { ui.date = todayISO(); render(); }
+    else if (a === 'copy-acc') { const c = cycleFor(ui.date); if (c) copyText(accountabilityText(c, ui.date), 'Accountability kopiert'); }
     else if (a === 'step') {
       const c = cycleFor(ui.date); if (!c) return;
       const key = el.dataset.key;
