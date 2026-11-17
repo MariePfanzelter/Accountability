@@ -868,11 +868,17 @@ input.mk-search::-webkit-search-cancel-button { display: none; }
 .acc-copy svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
 .acc-copy:active { transform: scale(.94); }
 
-/* ============ BV: Feld + Dropdown mit festen Beträgen ============ */
-.bv-step input { flex: 1; width: 0; min-width: 0; }
-.bv-sel {
-  flex: none; width: 52px; height: 36px; border: 0; border-left: 1px solid var(--border); border-radius: 0;
-  background: var(--surface-2); color: var(--accent); font-size: 16px; font-weight: 700; text-align: center; text-align-last: center;
-  padding: 0; -webkit-appearance: none; appearance: none; cursor: pointer;
+/* ============ BV: Tageswert + Knopf „BV hinzufügen" (öffnet Auswahl) ============ */
+.bv-wrap { grid-area: s; display: grid; gap: 6px; min-width: 0; }
+.bv-input {
+  width: 100%; min-width: 0; height: 38px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface);
+  text-align: center; font-weight: 700; font-size: 16px; color: var(--text);
 }
-.bv-sel:focus { outline: none; background: var(--accent-soft); }
+.bv-input:focus { outline: none; border-color: var(--accent); background: var(--accent-soft); }
+.bv-add {
+  position: relative; height: 36px; border-radius: 99px; background: var(--gold); color: #fff;
+  display: grid; place-items: center; font-weight: 700; font-size: .82rem; white-space: nowrap; overflow: hidden;
+  box-shadow: 0 8px 18px -12px rgba(122, 85, 48, .8);
+}
+.bv-add:active { transform: scale(.97); }
+.bv-add select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; cursor: pointer; }

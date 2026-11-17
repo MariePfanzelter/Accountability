@@ -648,13 +648,15 @@
   // Häufige BV-Beträge zum Antippen (werden zum Tageswert addiert); anderer Betrag direkt ins Feld
   const BV_AMOUNTS = [250, 220, 1025];
   // BV: Feld = Tageswert, Dropdown addiert einen festen Betrag oder springt ins Feld für einen anderen Betrag
-  const bvField = (c, date) => `<div class="stepper bv-step">
-      <input inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="0" aria-label="Volumen (BV)">
-      <select class="bv-sel" data-action="bv-pick" aria-label="BV hinzufügen">
-        <option value="" selected>+ ▾</option>
-        ${BV_AMOUNTS.map((n) => `<option value="${n}">+ ${fmt(n)} BV</option>`).join('')}
-        <option value="other">Anderer Betrag …</option>
-      </select>
+  const bvField = (c, date) => `<div class="bv-wrap">
+      <input class="bv-input" inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="0" aria-label="Volumen (BV) heute">
+      <label class="bv-add"><span>＋ BV hinzufügen</span>
+        <select data-action="bv-pick" aria-label="BV hinzufügen">
+          <option value="" selected disabled hidden>BV hinzufügen</option>
+          ${BV_AMOUNTS.map((n) => `<option value="${n}">${fmt(n)} BV</option>`).join('')}
+          <option value="other">Anderer Betrag …</option>
+        </select>
+      </label>
     </div>`;
   function todayMain(c, date) {
     const cs = counts(c, date);
@@ -1402,12 +1404,17 @@
       const c = cycleFor(ui.date), v = t.value; t.value = '';
       const inp = $('input[data-key="quali_volume"]', app);
       if (!c || !v) return;
-      if (v === 'other') { if (inp) { inp.focus(); inp.select(); } return; }
-      const nv = numVal(c, ui.date, 'quali_volume') + Number(v);
+      let add = Number(v);
+      if (v === 'other') {
+        const r = window.prompt('Wie viel BV möchtest du hinzufügen?', '');
+        add = parseNum(r || '');
+        if (!(add > 0)) return;
+      }
+      const nv = numVal(c, ui.date, 'quali_volume') + add;
       setValue(c, ui.date, 'quali_volume', nv);
       if (inp) inp.value = nv;
       refreshToday(c, ui.date);
-      toast(`+${fmt(Number(v))} BV`);
+      toast(`+${fmt(add)} BV · heute ${fmt(nv)} BV`);
       return;
     }
     if (a === 'achieved-rank') {
