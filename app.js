@@ -54,7 +54,7 @@
     { id: 'followups', label: 'Alle Kontakte nachgefasst', keys: ['pro_cycle_followups'] },
     { id: 'offline', label: 'Offline Meeting organisiert', keys: ['pro_cycle_offline_meetings'] },
   ];
-  const DEFAULT_GOALS = { tiktok: 3, contacts: 100, testreel: 1, story: 1, pd: 1, sprechstory: 1, sprechtiktok: 2, followups: 1, offline: 1 };
+  const DEFAULT_GOALS = { tiktok: 3, contacts: 100, testreel: 1, story: 1, pd: 1, sprechstory: 1, sprechtiktok: 2, followups: 1, offline: 1, closingsWeek: null, starterWeek: null };
 
   // Rank-Tabelle (BV pro Bein, Residual pro Paid Cycle)
   const RANKS = [
@@ -458,6 +458,17 @@
     return { rank: r, total, need, week: { bv, starter, closings, praesis, fcs, nummern } };
   }
 
+  // BV-Ziel einer Woche: was im Cycle noch fehlt, gleichmäßig auf die verbleibenden Wochen verteilt.
+  // Woche 1 = Gesamt-BV / 4; was in einer Woche fehlt, wandert automatisch in die folgenden Wochen.
+  function weekBVGoal(c, w, plan) {
+    if (!plan) return null;
+    let before = 0;
+    for (let i = 0; i < w; i++) before += weekSum(c, ['quali_volume'], i);
+    const left = Math.max(1, weeksOf(c) - w);
+    return Math.max(0, Math.ceil((plan.need - before) / left - 1e-9));
+  }
+  const userGoal = (id) => { const v = state.settings.goals[id]; return v > 0 ? v : null; };
+
   /* ================= Status ================= */
   // Tages-Accountability als Text zum Kopieren (Grundliste immer, Extras nur wenn eingetragen)
   function accountabilityText(c, date) {
@@ -618,7 +629,7 @@
     for (const t of CYCLE_TODOS) out[t.id] = [cycleSum(c, t.keys), g[t.id]];
     out.checkups = [cycleSum(c, ['pro_cycle_checkups']), null];
     for (const m of METRICS.filter((x) => x.section === 'outcome' || x.section === 'team')) {
-      out[m.key] = [weekSum(c, [m.key], w), m.plan && plan ? plan.week[m.plan] : null];
+      out[m.key] = [weekSum(c, [m.key], w), m.key === 'quali_volume' ? weekBVGoal(c, w, plan) : m.key === 'sales_closing' ? userGoal('closingsWeek') : m.key === 'quali_starter' ? userGoal('starterWeek') : null];
     }
     return out;
   }
@@ -823,10 +834,10 @@
       const v = weekSum(c, t.keys, w), ok = v >= g[t.id];
       return `<span class="wtodo ${ok ? 'ok' : ''}">${ok ? '✓' : '○'} ${esc(t.label)} <b>${fmt(v)}/${fmt(g[t.id])}</b></span>`;
     }).join('');
-    const main = [['sales_closing', 'closings', 'Closings'], ['quali_starter', 'starter', 'Starter'], ['quali_volume', 'bv', 'BV']]
-      .map(([k, p, l]) => (plan ? progRow(l, weekSum(c, [k], w), plan.week[p]) : `<div class="prog"><span class="name">${l}</span><span class="nums"><b>${fmt(weekSum(c, [k], w))}</b></span></div>`)).join('');
-    const small = [['sales_nummern', 'nummern', 'Nummern'], ['sales_fcs', 'fcs', 'First Calls'], ['sales_praesis', 'praesis', 'Präsis']]
-      .map(([k, p, l]) => `<span>${l} <b>${fmt(weekSum(c, [k], w))}</b>${plan ? `<span class="muted">/${fmt(plan.week[p])}</span>` : ''}</span>`).join('');
+    const main = [['sales_closing', userGoal('closingsWeek'), 'Closings'], ['quali_starter', userGoal('starterWeek'), 'Starter'], ['quali_volume', weekBVGoal(c, w, plan), 'BV']]
+      .map(([k, goal, l]) => (goal != null ? progRow(l, weekSum(c, [k], w), goal) : `<div class="prog"><span class="name">${l}</span><span class="nums"><b>${fmt(weekSum(c, [k], w))}</b></span></div>`)).join('');
+    const small = [['sales_nummern', 'Nummern'], ['sales_fcs', 'First Calls'], ['sales_praesis', 'Präsis']]
+      .map(([k, l]) => `<span>${l} <b>${fmt(weekSum(c, [k], w))}</b></span>`).join('');
     const tc = weekSum(c, ['team_closing'], w), ts = weekSum(c, ['team_starter'], w);
     return `<section class="card week ${current ? 'current' : ''}">
       <div class="card-head"><h2>Woche ${w + 1}</h2><span class="muted small">${weekRange(c, w)}${current ? ' · <span class="pill">aktuell</span>' : ''}</span></div>
@@ -1003,7 +1014,9 @@
     const achievedIdx = RANKS.findIndex((r) => r.name === s.achievedRank);
     const target = nextRank(s.achievedRank);
     const c = selectedCycle();
-    const goalInput = (id, label, unit) => `<label class="field">${label}<div class="row"><input class="input num" inputmode="decimal" data-goal="${id}" value="${g[id]}"><span class="muted small">${unit}</span></div></label>`;
+    const goalInput = (id, label, unit, ph = '') => `<label class="field">${label}<div class="row"><input class="input num" inputmode="decimal" data-goal="${id}" value="${g[id] ?? ''}" placeholder="${ph}"><span class="muted small">${unit}</span></div></label>`;
+    const curC = cycleFor(todayISO()), curPlan = curC ? planFor(curC.targetRank) : null;
+    const bvNow = curC && curPlan ? weekBVGoal(curC, weekIdx(curC, todayISO()), curPlan) : null;
     const ladder = RANKS.map((r, i) => {
       const st = i <= achievedIdx ? '<span class="chip st-done">✓ erreicht</span>' : r === target ? '<span class="pill">nächstes Ziel</span>' : '';
       return `<tr class="${r === target ? 'target' : ''} ${i <= achievedIdx ? 'achieved' : ''}">
@@ -1057,6 +1070,16 @@
             ${goalInput('followups', 'Alle Kontakte nachfassen', 'pro Cycle')}
             ${goalInput('offline', 'Offline Meeting', 'pro Cycle')}
           </div>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><h2>Wochenziele</h2></div>
+          <div class="set-grid">
+            <div class="field">BV<div class="row" style="min-height:44px"><b style="font-size:1.05rem">${bvNow != null ? fmt(bvNow) : '–'}</b><span class="muted small">diese Woche</span></div></div>
+            ${goalInput('closingsWeek', 'Closings', 'pro Woche', '–')}
+            ${goalInput('starterWeek', 'Starter', 'pro Woche', '–')}
+          </div>
+          <p class="muted small" style="margin:10px 0 0">BV wird automatisch berechnet: Gesamt-BV ÷ 4 Wochen. Was in einer Woche fehlt, wird auf die restlichen Wochen aufgeteilt – so kommst du am Ende des Cycles genau auf dein Ziel. Closings und Starter leer lassen = kein Ziel.</p>
         </section>
 
         ${c ? '' : noCycleCard()}
@@ -1367,7 +1390,11 @@
       }).catch(() => toast('Datei konnte nicht gelesen werden')).finally(() => { t.value = ''; });
       return;
     }
-    if (t.dataset.goal) { const v = parseNum(t.value); if (v !== null && v >= 0) s.goals[t.dataset.goal] = v; touchSettings(); save(); return; }
+    if (t.dataset.goal) {
+      const v = parseNum(t.value), opt = t.dataset.goal === 'closingsWeek' || t.dataset.goal === 'starterWeek';
+      if (v !== null && v >= 0) s.goals[t.dataset.goal] = v; else if (opt && !t.value.trim()) s.goals[t.dataset.goal] = null;
+      touchSettings(); save(); return;
+    }
     if (t.dataset.rate) { const v = parseNum(t.value); if (v !== null && v > 0) s.rates[t.dataset.rate] = v; touchSettings(); save(); render(); return; }
     if (t.dataset.base !== undefined) { s.baseBV = Math.max(0, parseNum(t.value) || 0); touchSettings(); save(); render(); return; }
   });
