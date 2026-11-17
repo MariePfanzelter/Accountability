@@ -462,9 +462,13 @@
   // Woche 1 = Gesamt-BV / 4; was in einer Woche fehlt, wandert automatisch in die folgenden Wochen.
   function weekBVGoal(c, w, plan) {
     if (!plan) return null;
+    // Vergangene Wochen behalten ihr damaliges Ziel; aktuelle + kommende Wochen teilen sich den Rest gleichmäßig.
+    const today = todayISO(), n = weeksOf(c);
+    const curW = today < c.start ? 0 : diffDays(c.start, today) >= c.length ? n : weekIdx(c, today);
+    const from = Math.min(w, curW);
     let before = 0;
-    for (let i = 0; i < w; i++) before += weekSum(c, ['quali_volume'], i);
-    const left = Math.max(1, weeksOf(c) - w);
+    for (let i = 0; i < from; i++) before += weekSum(c, ['quali_volume'], i);
+    const left = Math.max(1, n - from);
     return Math.max(0, Math.ceil((plan.need - before) / left - 1e-9));
   }
   const userGoal = (id) => { const v = state.settings.goals[id]; return v > 0 ? v : null; };
