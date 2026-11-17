@@ -498,7 +498,7 @@
     ];
     const extras = [['instagram_sprechstories', 'Sprechstory'], ['tiktok_sprechtiktoks', 'Sprech-TikTok'], ['sales_fu_closing', 'FU Closings'],
       ['pro_cycle_followups', 'Kontakte nachgefasst'], ['pro_cycle_offline_meetings', 'Offline Meeting'], ['team_closing', 'Team Closings'], ['team_starter', 'Team Starter']];
-    for (const [k, l] of extras) if (numVal(c, date, k)) lines.push(`${l}: ${v(k)}`);
+    for (const [k, l] of extras) if (numVal(c, date, k)) lines.push(k === 'pro_cycle_followups' ? 'Alle Kontakte nachgefasst: ✅' : `${l}: ${v(k)}`);
     lines.push(`Persönlichkeitsentwicklung: ${todoValue(c, date, DAILY_TODOS[4]) ? '✅' : ''}`);
     return lines.join('\n');
   }
@@ -671,7 +671,8 @@
 
     const cyc = `<section class="card">
       <div class="card-head"><h2>Cycle</h2></div>
-      ${row('Kontakte nachgefasst', 'followups', step('pro_cycle_followups', 'Kontakte nachgefasst'))}
+      ${(() => { const on = cycleSum(c, ['pro_cycle_followups']) > 0;
+        return row('Alle Kontakte nachgefasst', null, `<button type="button" class="check ${on ? 'on' : ''}" data-action="fu-toggle" role="checkbox" aria-checked="${on}" aria-label="Alle Kontakte nachgefasst">✓</button>`); })()}
       ${row('Offline Meeting', 'offline', step('pro_cycle_offline_meetings', 'Offline Meeting'))}
       ${row('Checkups', 'checkups', step('pro_cycle_checkups', 'Checkups'))}
     </section>`;
@@ -1305,6 +1306,14 @@
     if (a === 'day') { ui.date = addDays(ui.date, Number(el.dataset.delta)); render(); }
     else if (a === 'go-today') { ui.date = todayISO(); render(); }
     else if (a === 'copy-acc') { const c = cycleFor(ui.date); if (c) copyText(accountabilityText(c, ui.date), 'Accountability kopiert'); }
+    else if (a === 'fu-toggle') {
+      // Einmal pro Cycle: Haken setzt den Tag, Haken weg löscht ihn im ganzen Cycle
+      const c = cycleFor(ui.date); if (!c) return;
+      if (cycleSum(c, ['pro_cycle_followups']) > 0) {
+        for (const d of Object.keys(c.entries)) if (c.entries[d]?.pro_cycle_followups != null) setValue(c, d, 'pro_cycle_followups', null);
+      } else setValue(c, ui.date, 'pro_cycle_followups', 1);
+      render();
+    }
     else if (a === 'step') {
       const c = cycleFor(ui.date); if (!c) return;
       const key = el.dataset.key;
