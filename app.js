@@ -142,9 +142,14 @@
     return { version: 2, settings, cycles };
   }
 
+  // Sicherheitskopie: wird bei jedem Speichern mitgeschrieben und greift, falls der Hauptspeicher fehlt/kaputt ist.
+  // Updates der App (neue Version auf GitHub) ändern nur den Code – die Einträge im Browser bleiben erhalten.
+  const BACKUP_KEY = STORE_KEY + '.backup';
   function load() {
-    const raw = lsGet(STORE_KEY);
-    if (raw) { try { const d = JSON.parse(raw); if (d && Array.isArray(d.cycles)) return migrate(d); } catch { /* Seed */ } }
+    for (const key of [STORE_KEY, BACKUP_KEY]) {
+      const raw = lsGet(key);
+      if (raw) { try { const d = JSON.parse(raw); if (d && Array.isArray(d.cycles)) return migrate(d); } catch { /* nächster */ } }
+    }
     if (window.SEED_DATA) return migrate(clone(window.SEED_DATA));
     return migrate({ cycles: [] });
   }
@@ -186,11 +191,23 @@
     setSaveState('Speichert …');
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      const ok = lsSet(STORE_KEY, JSON.stringify(state));
+      const ok = writeNow();
       if (!ok) setSaveState('⚠ Speichern fehlgeschlagen');
       else if (sync) scheduleSync(); else setSaveState('✓ Gespeichert');
     }, 250);
   }
+  function writeNow() {
+    const str = JSON.stringify(state);
+    const ok = lsSet(STORE_KEY, str);
+    if (ok) lsSet(BACKUP_KEY, str);
+    return ok;
+  }
+  // Beim Schließen/Wegwechseln sofort speichern (nicht erst nach der kurzen Verzögerung)
+  const flush = () => { clearTimeout(saveTimer); writeNow(); };
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  // Browser bitten, die Daten dauerhaft zu behalten (schützt v. a. auf dem iPhone vor automatischem Löschen)
+  try { navigator.storage?.persist?.(); } catch { /* egal */ }
   function setSaveState(t) { $('#saveState').textContent = t; }
   const touchSettings = () => { state.settings.ts = Date.now(); };
   const touchCycle = (c) => { c.metaTs = Date.now(); };
@@ -275,7 +292,7 @@
       const mergedStr = JSON.stringify(merged);
       if (mergedStr !== JSON.stringify(state)) {
         state = merged;
-        lsSet(STORE_KEY, mergedStr);
+        if (lsSet(STORE_KEY, mergedStr)) lsSet(BACKUP_KEY, mergedStr);
         if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#app input, #app textarea')) pendingRender = true;
         else render();
       }
