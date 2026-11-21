@@ -54,7 +54,7 @@
     { id: 'followups', label: 'Alle Kontakte nachgefasst', keys: ['pro_cycle_followups'] },
     { id: 'offline', label: 'Offline Meeting organisiert', keys: ['pro_cycle_offline_meetings'] },
   ];
-  const DEFAULT_GOALS = { tiktok: 3, contacts: 100, testreel: 1, story: 1, pd: 1, sprechstory: 1, sprechtiktok: 2, followups: 1, offline: 1, closingsWeek: null, starterWeek: null };
+  const DEFAULT_GOALS = { tiktok: 3, contacts: 100, testreel: 1, story: 1, pd: 1, sprechstory: 1, sprechtiktok: 2, followups: 1, offline: 1, closingsWeek: null, starterWeek: null, bvStandard: 250, bvPremium: 550, bvSignature: 1025 };
 
   // Rank-Tabelle (BV pro Bein, Residual pro Paid Cycle)
   const RANKS = [
@@ -646,14 +646,15 @@
   }
 
   // Häufige BV-Beträge zum Antippen (werden zum Tageswert addiert); anderer Betrag direkt ins Feld
-  const BV_AMOUNTS = [250, 220, 1025];
+  // Pakete: Volumenpunkte sind in den Einstellungen änderbar
+  const BV_PACKS = [['bvStandard', 'Standard'], ['bvPremium', 'Premium'], ['bvSignature', 'Signature']];
   // BV: Feld = Tageswert, Dropdown addiert einen festen Betrag oder springt ins Feld für einen anderen Betrag
   const bvField = (c, date) => `<div class="stepper bv-step">
       <input inputmode="decimal" autocomplete="off" data-key="quali_volume" value="${getVal(c, date, 'quali_volume') ?? ''}" placeholder="0" aria-label="Volumen (BV) heute">
       <label class="bv-plus" title="BV hinzufügen"><span aria-hidden="true">+</span>
         <select data-action="bv-pick" aria-label="BV hinzufügen">
           <option value="" selected disabled hidden>BV hinzufügen</option>
-          ${BV_AMOUNTS.map((n) => `<option value="${n}">${fmt(n)} BV</option>`).join('')}
+          ${BV_PACKS.map(([id, l]) => `<option value="${id}">${l} (${fmt(state.settings.goals[id] || 0)} BV)</option>`).join('')}
           <option value="other">Anderer Betrag …</option>
         </select>
       </label>
@@ -1100,6 +1101,16 @@
           <p class="muted small" style="margin:10px 0 0">BV wird automatisch berechnet: Gesamt-BV ÷ 4 Wochen. Was in einer Woche fehlt, wird auf die restlichen Wochen aufgeteilt – so kommst du am Ende des Cycles genau auf dein Ziel. Closings und Starter leer lassen = kein Ziel.</p>
         </section>
 
+        <section class="card">
+          <div class="card-head"><h2>Volumenpunkte</h2></div>
+          <div class="set-grid">
+            ${goalInput('bvStandard', 'Standard', 'BV')}
+            ${goalInput('bvPremium', 'Premium', 'BV')}
+            ${goalInput('bvSignature', 'Signature', 'BV')}
+          </div>
+          <p class="muted small" style="margin:10px 0 0">Erscheinen bei „Heute → Volumen (BV) → +“. Jeden anderen Betrag kannst du dort über „Anderer Betrag …“ selbst eintragen.</p>
+        </section>
+
         ${c ? '' : noCycleCard()}
 
         ${syncCard()}
@@ -1404,12 +1415,12 @@
       const c = cycleFor(ui.date), v = t.value; t.value = '';
       const inp = $('input[data-key="quali_volume"]', app);
       if (!c || !v) return;
-      let add = Number(v);
+      let add = Number(state.settings.goals[v]) || 0;
       if (v === 'other') {
         const r = window.prompt('Wie viel BV möchtest du hinzufügen?', '');
         add = parseNum(r || '');
-        if (!(add > 0)) return;
       }
+      if (!(add > 0)) return;
       const nv = numVal(c, ui.date, 'quali_volume') + add;
       setValue(c, ui.date, 'quali_volume', nv);
       if (inp) inp.value = nv;
