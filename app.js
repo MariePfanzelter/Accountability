@@ -159,7 +159,8 @@
     s.deleted = s.deleted || {};
     s.marketing = Array.isArray(s.marketing) ? s.marketing.filter((m) => m && m.id && !s.deleted[m.id]) : [];
     // Chat-Vorlagen einmalig hinzufügen (gelöschte bleiben gelöscht, bearbeitete bleiben bearbeitet)
-    s.marketing = s.marketing.filter((m) => m.id !== 's-wa-2');
+    const merged = new Set(window.MK_MERGED || []);
+    s.marketing = s.marketing.filter((m) => m.id !== 's-wa-2' && !merged.has(m.id));
     s.marketing.forEach((m) => { if (m.text && m.text.includes('{Name}')) m.text = m.text.replace(/\s?\{Name\}/g, ''); });
     const have = new Set(s.marketing.map((m) => m.id));
     (window.MK_SEED || []).forEach((m, i) => { if (!have.has(m.id) && !s.deleted[m.id]) s.marketing.push({ ...m, url: '', fav: false, order: i + 1, created: 0, ts: 0 }); });
@@ -544,6 +545,7 @@
     date: todayISO(),
     cycleId: null,
     mkCat: lsGet('acc.mkCat') || 'start',
+    mkLang: ['de', 'st', 'en'].includes(lsGet('acc.mkLang')) ? lsGet('acc.mkLang') : 'de',
     mkQuery: '',
     mkEdit: null, // null | 'new' | id
     mkDraft: null,
@@ -879,10 +881,19 @@
     start: { label: 'Erstnachricht', icon: '👋', hint: 'Erste DM auf TikTok / Insta' },
     reply: { label: 'Antworten', icon: '💬', hint: 'Wenn sie zurückschreibt' },
     wa: { label: 'WhatsApp', icon: '📱', hint: 'Nummer, Video, Call ausmachen' },
+    fu: { label: 'Follow-ups', icon: '🔁', hint: 'Kontakte wieder anschreiben' },
     obj: { label: 'Einwände', icon: '🛡️', hint: 'Bedanken – Ergründen – Lösung' },
     content: { label: 'Content', icon: '💡', hint: 'Hooks, Ideen, Inspo' },
   };
   const MK_LEGACY = { dm: 'reply', hook: 'content', idea: 'content', inspo: 'content' };
+  // Content-Texte in drei Sprachen: eigene Übersetzungen (m.tr) vor den mitgelieferten (MK_TR)
+  const MK_LANGS = { de: 'Deutsch', st: 'Südtirolerisch', en: 'English' };
+  const mkTr = (m) => {
+    const seed = (window.MK_TR || {})[m.id];
+    const base = seed ? { de: seed.de, st: seed.st, en: seed.en, [seed.o]: m.text } : {}; // Originalsprache = aktueller (evtl. bearbeiteter) Text
+    return { ...base, ...(m.tr || {}) };
+  };
+  const mkText = (m) => (mkCatOf(m) === 'content' ? mkTr(m)[ui.mkLang] || m.text : m.text) || m.url || '';
   const mkCatOf = (m) => (MK_CATS[m.cat] ? m.cat : MK_LEGACY[m.cat] || 'content');
   const MK_GUIDE = `<details class="card mk-guide">
       <summary><b>Leitfaden Einwandbehandlung</b><span class="muted small">antippen</span></summary>
@@ -906,7 +917,7 @@
     const q = ui.mkQuery.trim().toLowerCase();
     return state.marketing
       .filter((m) => ui.mkCat === 'all' || mkCatOf(m) === ui.mkCat)
-      .filter((m) => !q || `${m.title} ${m.text} ${m.url}`.toLowerCase().includes(q))
+      .filter((m) => !q || `${m.title} ${m.text} ${m.url} ${Object.values(mkCatOf(m) === 'content' ? mkTr(m) : {}).join(' ')}`.toLowerCase().includes(q))
       .sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || (a.order ? 1 : 0) - (b.order ? 1 : 0) || (a.order || 0) - (b.order || 0) || (b.created || 0) - (a.created || 0));
   }
   function mkEditor() {
@@ -915,7 +926,9 @@
       <div class="card-head"><h2>${isNew ? 'Neuer Eintrag' : 'Eintrag bearbeiten'}</h2></div>
       <div class="seg mk-seg" role="radiogroup" aria-label="Kategorie">${Object.entries(MK_CATS).map(([k, v]) => `<button type="button" role="radio" aria-checked="${k === cat}" class="${k === cat ? 'on' : ''}" data-action="mk-draft-cat" data-cat="${k}"><span aria-hidden="true">${v.icon}</span>${v.label.split(' ')[0]}</button>`).join('')}</div>
       <label class="field">Titel<input class="input" data-mk="title" value="${esc(d.title || '')}" placeholder="z. B. Like auf TikTok" autocomplete="off"></label>
-      <label class="field">Text<textarea class="input" data-mk="text" rows="6" placeholder="Der Text zum Kopieren …">${esc(d.text || '')}</textarea></label>
+      ${cat === 'content'
+        ? Object.entries(MK_LANGS).map(([k, l]) => `<label class="field">${l}<textarea class="input" data-mk="tr.${k}" rows="3" placeholder="${k === 'de' ? 'Text auf Deutsch …' : k === 'st' ? 'Text auf Südtirolerisch …' : 'Text in English …'}">${esc((d.tr || {})[k] || '')}</textarea></label>`).join('')
+        : `<label class="field">Text<textarea class="input" data-mk="text" rows="6" placeholder="Der Text zum Kopieren …">${esc(d.text || '')}</textarea></label>`}
       <label class="field">Link (optional)<input class="input" data-mk="url" type="url" inputmode="url" value="${esc(d.url || '')}" placeholder="https://…" autocomplete="off"></label>
       <div class="row wrap mk-editor-actions">
         <button type="button" class="btn primary" data-action="mk-save">✓ Speichern</button>
@@ -945,7 +958,7 @@
   }
   // Content: kompakte Zeile – Text antippen kopiert, ✎ bearbeitet
   const mkRow = (m) => ui.mkEdit === m.id ? `<li class="mk-row-edit">${mkEditor()}</li>` : `<li class="mk-row">
-      <div class="mk-line" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${m.title ? `<b>${esc(m.title)}</b> ` : ''}${esc(m.text || m.url || '')}</div>
+      <div class="mk-line" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${m.title ? `<b>${esc(m.title)}</b> ` : ''}${esc(mkText(m))}</div>
       <button type="button" class="mk-mini" data-action="mk-edit" data-id="${m.id}" aria-label="Bearbeiten">✎</button>
     </li>`;
   function mkList() {
@@ -974,30 +987,42 @@
       </div>
       ${ui.mkEdit === 'new' ? mkEditor() : ''}
       ${state.marketing.length ? `<div class="mk-filters">
-        <div class="mk-cats" role="tablist">${tabs.map(([k, l, i]) => `<button type="button" role="tab" aria-selected="${ui.mkCat === k}" class="mk-cat-btn ${ui.mkCat === k ? 'on' : ''}" data-action="mk-cat" data-cat="${k}">${i ? `<span aria-hidden="true">${i}</span>` : ''}${l}<small>${n(k)}</small></button>`).join('')}</div>
+        <div class="mk-cats" role="tablist">${tabs.map(([k, l, i]) => `<button type="button" role="tab" aria-selected="${ui.mkCat === k}" class="mk-cat-btn ${ui.mkCat === k ? 'on' : ''}" data-action="mk-cat" data-cat="${k}">${l}<small>${n(k)}</small></button>`).join('')}</div>
       </div>` : ''}
       ${ui.mkCat === 'obj' ? MK_GUIDE : ''}
+      ${ui.mkCat === 'content' ? `<div class="mk-lang" role="radiogroup" aria-label="Sprache">${Object.entries(MK_LANGS).map(([k, l]) => `<button type="button" role="radio" aria-checked="${ui.mkLang === k}" class="${ui.mkLang === k ? 'on' : ''}" data-action="mk-lang" data-lang="${k}">${l}</button>`).join('')}</div>` : ''}
       <div id="mkList">${mkList()}</div>`;    const on = $('.mk-cat-btn.on', app); if (on) on.parentNode.scrollLeft = on.offsetLeft - 16;
   }
   function mkAction(a, el) {
     const byId = (id) => state.marketing.find((m) => m.id === id);
     if (a === 'mk-new') {
       ui.mkEdit = 'new';
-      ui.mkDraft = { cat: el.dataset.cat || (MK_CATS[ui.mkCat] ? ui.mkCat : 'start'), title: '', text: '', url: '' };
+      ui.mkDraft = { cat: el.dataset.cat || (MK_CATS[ui.mkCat] ? ui.mkCat : 'start'), title: '', text: '', url: '', tr: {} };
       render(); window.scrollTo({ top: 0, behavior: 'smooth' });
       setTimeout(() => $('[data-mk="title"]')?.focus({ preventScroll: true }), 50);
     } else if (a === 'mk-edit') {
       const m = byId(el.dataset.id); if (!m) return;
-      ui.mkEdit = m.id; ui.mkDraft = { cat: mkCatOf(m), title: m.title || '', text: m.text || '', url: m.url || '' };
+      ui.mkEdit = m.id; ui.mkDraft = { cat: mkCatOf(m), title: m.title || '', text: m.text || '', url: m.url || '', tr: mkCatOf(m) === 'content' ? { ...mkTr(m) } : {} };
+      if (ui.mkDraft.cat === 'content' && !Object.values(ui.mkDraft.tr).some(Boolean)) ui.mkDraft.tr = { de: m.text || '' };
       const y = window.scrollY; render(); window.scrollTo({ top: y }); // Position halten, nicht nach oben springen
     } else if (a === 'mk-draft-cat') {
-      ui.mkDraft.cat = el.dataset.cat;
-      $$('[data-action="mk-draft-cat"]', app).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
+      const d = ui.mkDraft, was = d.cat; d.cat = el.dataset.cat;
+      // Wechsel zu/von Content: Text in die Sprachfelder übernehmen bzw. zurück
+      if (was !== 'content' && d.cat === 'content' && !Object.values(d.tr || {}).some(Boolean)) d.tr = { de: d.text };
+      if (was === 'content' && d.cat !== 'content' && !d.text) d.text = d.tr.de || d.tr.en || d.tr.st || '';
+      if ((was === 'content') !== (d.cat === 'content')) { const ed = $('.mk-editor', app); if (ed) ed.outerHTML = mkEditor(); }
+      else $$('[data-action="mk-draft-cat"]', app).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
     } else if (a === 'mk-cancel') {
       const y = window.scrollY; ui.mkEdit = null; ui.mkDraft = null; render(); window.scrollTo({ top: y });
     } else if (a === 'mk-save') {
       const d = ui.mkDraft;
       d.title = d.title.trim(); d.text = d.text.replace(/\s+$/, ''); d.url = d.url.trim();
+      if (d.cat === 'content') {
+        const t = {}; for (const k of Object.keys(MK_LANGS)) { const v = ((d.tr || {})[k] || '').replace(/\s+$/, ''); if (v) t[k] = v; }
+        const seed = (window.MK_TR || {})[ui.mkEdit];
+        d.text = (seed && t[seed.o]) || t.de || t.en || t.st || '';
+        d.tr = t;
+      } else d.tr = undefined;
       if (d.url && !/^https?:\/\//i.test(d.url)) d.url = `https://${d.url}`;
       if (!d.title && !d.text && !d.url) { toast('Bitte Titel, Text oder Link eintragen'); return; }
       const now = Date.now();
@@ -1017,7 +1042,11 @@
       const id = el.dataset.id; if (ui.mkOpen.has(id)) ui.mkOpen.delete(id); else ui.mkOpen.add(id);
       $('#mkList').innerHTML = mkList();
     } else if (a === 'mk-copy') {
-      const m = byId(el.dataset.id); if (m) copyText(m.text || m.url, 'Kopiert – jetzt einfügen');
+      const m = byId(el.dataset.id); if (m) copyText(mkText(m), 'Kopiert – jetzt einfügen');
+    } else if (a === 'mk-lang') {
+      ui.mkLang = el.dataset.lang; lsSet('acc.mkLang', ui.mkLang);
+      $$('[data-action="mk-lang"]', app).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
+      $('#mkList').innerHTML = mkList();
     } else if (a === 'mk-cat') {
       ui.mkCat = el.dataset.cat; lsSet('acc.mkCat', ui.mkCat); render();
     }
@@ -1396,7 +1425,11 @@
   app.addEventListener('input', (e) => {
     const t = e.target;
     if (t.id === 'pdTitle') { const c = cycleFor(ui.date); if (c) { $('#pdChips').innerHTML = pdChips(c, ui.date, t.value); $('#pdChips').scrollLeft = 0; } return; }
-    if (t.dataset.mk && ui.mkDraft) { ui.mkDraft[t.dataset.mk] = t.value; return; }
+    if (t.dataset.mk && ui.mkDraft) {
+      const k = t.dataset.mk;
+      if (k.startsWith('tr.')) (ui.mkDraft.tr || (ui.mkDraft.tr = {}))[k.slice(3)] = t.value; else ui.mkDraft[k] = t.value;
+      return;
+    }
     if (t.dataset.mkSearch !== undefined) { ui.mkQuery = t.value; $('#mkList').innerHTML = mkList(); return; }
     if (ui.view === 'today' && t.dataset.key) {
       const c = cycleFor(ui.date); if (!c) return;

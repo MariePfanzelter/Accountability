@@ -788,7 +788,7 @@ html { touch-action: pan-x pan-y; }  /* blockiert Pinch- und Doppeltipp-Zoom */
 }
 
 /* ============ Marketing: Chat-Vorlagen ============ */
-.mk-seg { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.mk-seg { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .mk-text[data-action] { cursor: copy; transition: background-color .15s ease; }
 .mk-text[data-action]:active { background: var(--accent-soft); }
 .mk-guide { margin-bottom: 14px; }
@@ -883,3 +883,9 @@ input.mk-search::-webkit-search-cancel-button { display: none; }
 .mk-row-edit .mk-editor { margin: 0; box-shadow: none; border: 1px solid var(--border-strong); }
 .mk-row-edit .mk-editor { padding: 14px 10px; }
 .mk-row-edit .mk-seg button { font-size: .64rem; padding-left: 2px; padding-right: 2px; }
+
+/* ============ Texte: Sprachwahl für Content ============ */
+.mk-lang { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; margin-bottom: 12px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; }
+.mk-lang button { border: 0; background: transparent; border-radius: 99px; height: 34px; font-size: .8rem; font-weight: 600; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mk-lang button.on { background: var(--gold); color: #fff; box-shadow: 0 6px 14px -10px rgba(122, 85, 48, .8); }
