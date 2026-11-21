@@ -162,6 +162,9 @@
     const merged = new Set(window.MK_MERGED || []);
     s.marketing = s.marketing.filter((m) => m.id !== 's-wa-2' && !merged.has(m.id));
     s.marketing.forEach((m) => { if (m.text && m.text.includes('{Name}')) m.text = m.text.replace(/\s?\{Name\}/g, ''); });
+    // Unbearbeitete Vorlagen (ts = 0) bekommen Titel/Text der aktuellen App-Version; selbst bearbeitete bleiben, wie sie sind
+    const seedById = new Map((window.MK_SEED || []).map((m) => [m.id, m]));
+    s.marketing.forEach((m) => { const sd = seedById.get(m.id); if (sd && !m.ts) { m.title = sd.title; m.text = sd.text; } });
     const have = new Set(s.marketing.map((m) => m.id));
     (window.MK_SEED || []).forEach((m, i) => { if (!have.has(m.id) && !s.deleted[m.id]) s.marketing.push({ ...m, url: '', fav: false, order: i + 1, created: 0, ts: 0 }); });
     s.cycles.sort((a, b) => a.start.localeCompare(b.start));
@@ -893,7 +896,9 @@
     const base = seed ? { de: seed.de, st: seed.st, en: seed.en, [seed.o]: m.text } : {}; // Originalsprache = aktueller (evtl. bearbeiteter) Text
     return { ...base, ...(m.tr || {}) };
   };
-  const mkText = (m) => (mkCatOf(m) === 'content' ? mkTr(m)[ui.mkLang] || m.text : m.text) || m.url || '';
+  const MK_LANG_CATS = new Set(['content', 'fu']); // Bereiche mit Sprachauswahl
+  const hasLangs = (cat) => MK_LANG_CATS.has(cat);
+  const mkText = (m) => (hasLangs(mkCatOf(m)) ? mkTr(m)[ui.mkLang] || m.text : m.text) || m.url || '';
   const mkCatOf = (m) => (MK_CATS[m.cat] ? m.cat : MK_LEGACY[m.cat] || 'content');
   const MK_GUIDE = `<details class="card mk-guide">
       <summary><b>Leitfaden Einwandbehandlung</b><span class="muted small">antippen</span></summary>
@@ -917,7 +922,7 @@
     const q = ui.mkQuery.trim().toLowerCase();
     return state.marketing
       .filter((m) => ui.mkCat === 'all' || mkCatOf(m) === ui.mkCat)
-      .filter((m) => !q || `${m.title} ${m.text} ${m.url} ${Object.values(mkCatOf(m) === 'content' ? mkTr(m) : {}).join(' ')}`.toLowerCase().includes(q))
+      .filter((m) => !q || `${m.title} ${m.text} ${m.url} ${Object.values(hasLangs(mkCatOf(m)) ? mkTr(m) : {}).join(' ')}`.toLowerCase().includes(q))
       .sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0) || (a.order ? 1 : 0) - (b.order ? 1 : 0) || (a.order || 0) - (b.order || 0) || (b.created || 0) - (a.created || 0));
   }
   function mkEditor() {
@@ -926,7 +931,7 @@
       <div class="card-head"><h2>${isNew ? 'Neuer Eintrag' : 'Eintrag bearbeiten'}</h2></div>
       <div class="seg mk-seg" role="radiogroup" aria-label="Kategorie">${Object.entries(MK_CATS).map(([k, v]) => `<button type="button" role="radio" aria-checked="${k === cat}" class="${k === cat ? 'on' : ''}" data-action="mk-draft-cat" data-cat="${k}"><span aria-hidden="true">${v.icon}</span>${v.label.split(' ')[0]}</button>`).join('')}</div>
       <label class="field">Titel<input class="input" data-mk="title" value="${esc(d.title || '')}" placeholder="z. B. Like auf TikTok" autocomplete="off"></label>
-      ${cat === 'content'
+      ${hasLangs(cat)
         ? Object.entries(MK_LANGS).map(([k, l]) => `<label class="field">${l}<textarea class="input" data-mk="tr.${k}" rows="3" placeholder="${k === 'de' ? 'Text auf Deutsch …' : k === 'st' ? 'Text auf Südtirolerisch …' : 'Text in English …'}">${esc((d.tr || {})[k] || '')}</textarea></label>`).join('')
         : `<label class="field">Text<textarea class="input" data-mk="text" rows="6" placeholder="Der Text zum Kopieren …">${esc(d.text || '')}</textarea></label>`}
       <label class="field">Link (optional)<input class="input" data-mk="url" type="url" inputmode="url" value="${esc(d.url || '')}" placeholder="https://…" autocomplete="off"></label>
@@ -939,7 +944,7 @@
   }
   function mkCard(m) {
     if (ui.mkEdit === m.id) return mkEditor(); // Bearbeiten direkt an Ort und Stelle
-    const cat = MK_CATS[mkCatOf(m)], open = ui.mkOpen.has(m.id), long = (m.text || '').length > 260 || (m.text || '').split('\n').length > 6;
+    const cat = MK_CATS[mkCatOf(m)], open = ui.mkOpen.has(m.id), txt = mkText(m), long = txt.length > 260 || txt.split('\n').length > 6;
     let host = '';
     try { host = m.url ? new URL(m.url).hostname.replace(/^www\./, '') : ''; } catch { host = m.url; }
     return `<article class="card mk-item ${m.fav ? 'fav' : ''}">
@@ -948,7 +953,7 @@
         <button type="button" class="mk-star ${m.fav ? 'on' : ''}" data-action="mk-fav" data-id="${m.id}" aria-pressed="${!!m.fav}" aria-label="Favorit">${m.fav ? '★' : '☆'}</button>
       </div>
       ${m.title && ui.mkCat === 'all' ? `<h3 class="mk-title">${esc(m.title)}</h3>` : ''}
-      ${m.text ? `<div class="mk-text ${long && !open ? 'clamp' : ''}" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${esc(m.text)}</div>${long ? `<button type="button" class="mk-more" data-action="mk-toggle" data-id="${m.id}">${open ? 'Weniger' : 'Ganzen Text zeigen'}</button>` : ''}` : ''}
+      ${m.text ? `<div class="mk-text ${long && !open ? 'clamp' : ''}" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${esc(txt)}</div>${long ? `<button type="button" class="mk-more" data-action="mk-toggle" data-id="${m.id}">${open ? 'Weniger' : 'Ganzen Text zeigen'}</button>` : ''}` : ''}
       <div class="mk-actions">
         ${m.text ? `<button type="button" class="btn primary sm" data-action="mk-copy" data-id="${m.id}">⧉ Kopieren</button>` : ''}
         ${m.url ? `<a class="btn sm" href="${esc(m.url)}" target="_blank" rel="noopener">↗ ${esc(host || 'Link')}</a>` : ''}
@@ -990,7 +995,7 @@
         <div class="mk-cats" role="tablist">${tabs.map(([k, l, i]) => `<button type="button" role="tab" aria-selected="${ui.mkCat === k}" class="mk-cat-btn ${ui.mkCat === k ? 'on' : ''}" data-action="mk-cat" data-cat="${k}">${l}<small>${n(k)}</small></button>`).join('')}</div>
       </div>` : ''}
       ${ui.mkCat === 'obj' ? MK_GUIDE : ''}
-      ${ui.mkCat === 'content' ? `<div class="mk-lang" role="radiogroup" aria-label="Sprache">${Object.entries(MK_LANGS).map(([k, l]) => `<button type="button" role="radio" aria-checked="${ui.mkLang === k}" class="${ui.mkLang === k ? 'on' : ''}" data-action="mk-lang" data-lang="${k}">${l}</button>`).join('')}</div>` : ''}
+      ${hasLangs(ui.mkCat) ? `<div class="mk-lang" role="radiogroup" aria-label="Sprache">${Object.entries(MK_LANGS).map(([k, l]) => `<button type="button" role="radio" aria-checked="${ui.mkLang === k}" class="${ui.mkLang === k ? 'on' : ''}" data-action="mk-lang" data-lang="${k}">${l}</button>`).join('')}</div>` : ''}
       <div id="mkList">${mkList()}</div>`;    const on = $('.mk-cat-btn.on', app); if (on) on.parentNode.scrollLeft = on.offsetLeft - 16;
   }
   function mkAction(a, el) {
@@ -1002,22 +1007,22 @@
       setTimeout(() => $('[data-mk="title"]')?.focus({ preventScroll: true }), 50);
     } else if (a === 'mk-edit') {
       const m = byId(el.dataset.id); if (!m) return;
-      ui.mkEdit = m.id; ui.mkDraft = { cat: mkCatOf(m), title: m.title || '', text: m.text || '', url: m.url || '', tr: mkCatOf(m) === 'content' ? { ...mkTr(m) } : {} };
-      if (ui.mkDraft.cat === 'content' && !Object.values(ui.mkDraft.tr).some(Boolean)) ui.mkDraft.tr = { de: m.text || '' };
+      ui.mkEdit = m.id; ui.mkDraft = { cat: mkCatOf(m), title: m.title || '', text: m.text || '', url: m.url || '', tr: hasLangs(mkCatOf(m)) ? { ...mkTr(m) } : {} };
+      if (hasLangs(ui.mkDraft.cat) && !Object.values(ui.mkDraft.tr).some(Boolean)) ui.mkDraft.tr = { de: m.text || '' };
       const y = window.scrollY; render(); window.scrollTo({ top: y }); // Position halten, nicht nach oben springen
     } else if (a === 'mk-draft-cat') {
       const d = ui.mkDraft, was = d.cat; d.cat = el.dataset.cat;
       // Wechsel zu/von Content: Text in die Sprachfelder übernehmen bzw. zurück
-      if (was !== 'content' && d.cat === 'content' && !Object.values(d.tr || {}).some(Boolean)) d.tr = { de: d.text };
-      if (was === 'content' && d.cat !== 'content' && !d.text) d.text = d.tr.de || d.tr.en || d.tr.st || '';
-      if ((was === 'content') !== (d.cat === 'content')) { const ed = $('.mk-editor', app); if (ed) ed.outerHTML = mkEditor(); }
+      if (!hasLangs(was) && hasLangs(d.cat) && !Object.values(d.tr || {}).some(Boolean)) d.tr = { de: d.text };
+      if (hasLangs(was) && !hasLangs(d.cat) && !d.text) d.text = d.tr.de || d.tr.en || d.tr.st || '';
+      if (hasLangs(was) !== hasLangs(d.cat)) { const ed = $('.mk-editor', app); if (ed) ed.outerHTML = mkEditor(); }
       else $$('[data-action="mk-draft-cat"]', app).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
     } else if (a === 'mk-cancel') {
       const y = window.scrollY; ui.mkEdit = null; ui.mkDraft = null; render(); window.scrollTo({ top: y });
     } else if (a === 'mk-save') {
       const d = ui.mkDraft;
       d.title = d.title.trim(); d.text = d.text.replace(/\s+$/, ''); d.url = d.url.trim();
-      if (d.cat === 'content') {
+      if (hasLangs(d.cat)) {
         const t = {}; for (const k of Object.keys(MK_LANGS)) { const v = ((d.tr || {})[k] || '').replace(/\s+$/, ''); if (v) t[k] = v; }
         const seed = (window.MK_TR || {})[ui.mkEdit];
         d.text = (seed && t[seed.o]) || t.de || t.en || t.st || '';

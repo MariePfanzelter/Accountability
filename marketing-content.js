@@ -2134,6 +2134,6 @@ When a woman says today that she doesn't want to work, everyone loses it. But wh
     items.push({ id, cat: 'content', title: '', text: langs[originals[0]] });
   }
   window.MK_SEED = (window.MK_SEED || []).concat(items);
-  window.MK_TR = tr; // Übersetzungen je ID: { de, st, en, o = Originalsprache }
+  window.MK_TR = Object.assign(window.MK_TR || {}, tr); // Übersetzungen je ID: { de, st, en, o = Originalsprache }
   window.MK_MERGED = merged; // IDs, die jetzt in einem anderen Eintrag stecken
 })();
