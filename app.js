@@ -925,6 +925,7 @@
     </section>`;
   }
   function mkCard(m) {
+    if (ui.mkEdit === m.id) return mkEditor(); // Bearbeiten direkt an Ort und Stelle
     const cat = MK_CATS[mkCatOf(m)], open = ui.mkOpen.has(m.id), long = (m.text || '').length > 260 || (m.text || '').split('\n').length > 6;
     let host = '';
     try { host = m.url ? new URL(m.url).hostname.replace(/^www\./, '') : ''; } catch { host = m.url; }
@@ -943,7 +944,7 @@
     </article>`;
   }
   // Content: kompakte Zeile – Text antippen kopiert, ✎ bearbeitet
-  const mkRow = (m) => `<li class="mk-row">
+  const mkRow = (m) => ui.mkEdit === m.id ? `<li class="mk-row-edit">${mkEditor()}</li>` : `<li class="mk-row">
       <div class="mk-line" data-action="mk-copy" data-id="${m.id}" role="button" tabindex="0" title="Antippen zum Kopieren">${m.title ? `<b>${esc(m.title)}</b> ` : ''}${esc(m.text || m.url || '')}</div>
       <button type="button" class="mk-mini" data-action="mk-edit" data-id="${m.id}" aria-label="Bearbeiten">✎</button>
     </li>`;
@@ -971,7 +972,7 @@
         <input class="mk-search" type="search" data-mk-search value="${esc(ui.mkQuery)}" placeholder="Suchen …" aria-label="Suchen" autocomplete="off">
         ${ui.mkEdit ? '' : '<button class="mk-plus" data-action="mk-new" aria-label="Eigenen Text hinzufügen" title="Eigenen Text hinzufügen">＋</button>'}
       </div>
-      ${ui.mkEdit ? mkEditor() : ''}
+      ${ui.mkEdit === 'new' ? mkEditor() : ''}
       ${state.marketing.length ? `<div class="mk-filters">
         <div class="mk-cats" role="tablist">${tabs.map(([k, l, i]) => `<button type="button" role="tab" aria-selected="${ui.mkCat === k}" class="mk-cat-btn ${ui.mkCat === k ? 'on' : ''}" data-action="mk-cat" data-cat="${k}">${i ? `<span aria-hidden="true">${i}</span>` : ''}${l}<small>${n(k)}</small></button>`).join('')}</div>
       </div>` : ''}
@@ -988,12 +989,12 @@
     } else if (a === 'mk-edit') {
       const m = byId(el.dataset.id); if (!m) return;
       ui.mkEdit = m.id; ui.mkDraft = { cat: mkCatOf(m), title: m.title || '', text: m.text || '', url: m.url || '' };
-      render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+      const y = window.scrollY; render(); window.scrollTo({ top: y }); // Position halten, nicht nach oben springen
     } else if (a === 'mk-draft-cat') {
       ui.mkDraft.cat = el.dataset.cat;
       $$('[data-action="mk-draft-cat"]', app).forEach((b) => { const on = b === el; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
     } else if (a === 'mk-cancel') {
-      ui.mkEdit = null; ui.mkDraft = null; render();
+      const y = window.scrollY; ui.mkEdit = null; ui.mkDraft = null; render(); window.scrollTo({ top: y });
     } else if (a === 'mk-save') {
       const d = ui.mkDraft;
       d.title = d.title.trim(); d.text = d.text.replace(/\s+$/, ''); d.url = d.url.trim();
@@ -1002,12 +1003,12 @@
       const now = Date.now();
       if (ui.mkEdit === 'new') state.marketing.push({ id: `m${now}${Math.random().toString(36).slice(2, 6)}`, ...d, fav: false, created: now, ts: now });
       else { const m = byId(ui.mkEdit); if (m) Object.assign(m, d, { ts: now }); }
-      ui.mkEdit = null; ui.mkDraft = null; save(); render(); toast('Gespeichert');
+      const y = window.scrollY; ui.mkEdit = null; ui.mkDraft = null; save(); render(); window.scrollTo({ top: y }); toast('Gespeichert');
     } else if (a === 'mk-delete') {
       const m = byId(ui.mkEdit);
       if (m && confirm(`„${m.title || 'Eintrag'}“ löschen?`)) {
         state.deleted[m.id] = Date.now(); state.marketing = state.marketing.filter((x) => x !== m);
-        ui.mkEdit = null; ui.mkDraft = null; save(); render(); toast('Gelöscht');
+        const y = window.scrollY; ui.mkEdit = null; ui.mkDraft = null; save(); render(); window.scrollTo({ top: y }); toast('Gelöscht');
       }
     } else if (a === 'mk-fav') {
       const m = byId(el.dataset.id); if (!m) return;
@@ -1098,7 +1099,7 @@
             ${goalInput('closingsWeek', 'Closings', 'pro Woche', '–')}
             ${goalInput('starterWeek', 'Starter', 'pro Woche', '–')}
           </div>
-          <p class="muted small" style="margin:10px 0 0">BV wird automatisch berechnet: Gesamt-BV ÷ 4 Wochen. Was in einer Woche fehlt, wird auf die restlichen Wochen aufgeteilt – so kommst du am Ende des Cycles genau auf dein Ziel. Closings und Starter leer lassen = kein Ziel.</p>
+          <p class="muted small" style="margin:10px 0 0">BV wird automatisch berechnet: Gesamt-BV ÷ 4 Wochen. Was in einer Woche fehlt, wird auf die restlichen Wochen aufgeteilt – so kommst du am Ende des Cycles genau auf dein Ziel.</p>
         </section>
 
         <section class="card">

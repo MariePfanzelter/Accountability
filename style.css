@@ -876,3 +876,10 @@ input.mk-search::-webkit-search-cancel-button { display: none; }
 }
 .bv-plus:active { transform: scale(.94); }
 .bv-plus select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; cursor: pointer; }
+
+/* Bearbeiten in der Content-Liste: Formular erscheint an der Stelle der Zeile */
+.mk-row-edit { list-style: none; border-top: 1px solid var(--border); padding: 8px 0; }
+.mk-row-edit:first-child { border-top: 0; }
+.mk-row-edit .mk-editor { margin: 0; box-shadow: none; border: 1px solid var(--border-strong); }
+.mk-row-edit .mk-editor { padding: 14px 10px; }
+.mk-row-edit .mk-seg button { font-size: .64rem; padding-left: 2px; padding-right: 2px; }
